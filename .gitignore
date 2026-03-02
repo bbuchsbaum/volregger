@@ -1,0 +1,12 @@
+# R build/check artifacts
+*.tar.gz
+.Rcheck/
+
+# Compiled objects/shared libs
+src/*.o
+src/*.so
+
+# Local library/test output
+tests/testthat/_snaps/
+
+# beads runtime files are already ignored by .beads/.gitignore
