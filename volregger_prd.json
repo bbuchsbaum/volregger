@@ -1,0 +1,539 @@
+{
+  "prd_meta": {
+    "title": "volregger PRD",
+    "subtitle": "Rigid-First Robust fMRI Motion Correction with Optional Slice-Aware Refinement",
+    "version": "0.1.0-draft",
+    "status": "draft",
+    "date": "2026-03-02",
+    "source_context": [
+      "Part 1 RAFT-MC concept notes",
+      "Part 2 package architecture and implementation plan"
+    ]
+  },
+  "product": {
+    "name": "volregger",
+    "problem_statement": "Retrospective fMRI motion correction should remain rigid-body by default, while addressing known residual error sources (reference bias and intra-volume motion) through robust templateing and optional acquisition-aware refinement.",
+    "target_users": [
+      "fMRI method developers",
+      "R/neuroim2 pipeline authors",
+      "research users needing MCFLIRT/3dvolreg-class behavior in R"
+    ],
+    "goals": [
+      "Deliver a fast and robust 6-DOF default engine competitive in class with MCFLIRT/3dvolreg on retrospective within-run correction.",
+      "Provide an optional slice/MB packet-aware refinement path without making the default solver fragile.",
+      "Expose QC and failure flags that support downstream censoring and reproducible analysis.",
+      "Keep R API small and stable; keep performance-critical operations in coarse-grained C++ kernels."
+    ],
+    "non_goals": [
+      "Nonlinear deformation as default motion model.",
+      "Full single-slice-to-volume registration in v1.",
+      "Surface-based motion correction.",
+      "Embedding spin-history repair inside core rigid optimization."
+    ],
+    "design_principles": [
+      "Rigid-first default.",
+      "Robust template over single fixed reference.",
+      "Robust local-normalized contrast over raw SSD.",
+      "Warm-start temporal continuity with small restart safety net.",
+      "Single final resampling step.",
+      "Separation of concerns: estimate, apply, qc, optional refinements."
+    ]
+  },
+  "detailed_notes_part2": {
+    "engines": {
+      "rigid_robust": [
+        "6-DOF rigid-body motion estimation.",
+        "Middle-volume bootstrap pass.",
+        "Robust mean-template refresh from aligned frames.",
+        "Multi-resolution LM/Gauss-Newton optimization.",
+        "Temporal warm starts and constant-velocity prediction.",
+        "Tiny restart set for suspicious/bad fits.",
+        "One final resample only."
+      ],
+      "rigid_spline": [
+        "Includes rigid_robust pipeline.",
+        "Fits smooth pose spline over time.",
+        "Uses slice/MB packet acquisition offsets in final resampling.",
+        "Optional refinement of spline control points in later versions."
+      ]
+    },
+    "public_api": {
+      "main": "volreg(x, mask, ref, ref_index, engine, slice_times, mb_groups, resample, interp_final, qc, control, verbose)",
+      "helpers": [
+        "estimate_motion(x, mask, ..., control)",
+        "apply_motion(x, motion, interp)",
+        "motion_qc(x, motion, mask)",
+        "framewise_disp(motion, radius)",
+        "dvars(x, mask, robust)"
+      ],
+      "return_object": [
+        "corrected",
+        "motion",
+        "mats",
+        "template",
+        "mask",
+        "qc",
+        "control"
+      ],
+      "class_and_methods": [
+        "class: volregger_fit",
+        "methods: print, plot, summary, coef, as.data.frame"
+      ]
+    },
+    "r_cpp_boundary": {
+      "policy": "Cross R/C++ boundary once for estimate, once for apply, once for metrics. Avoid frame loops in R.",
+      "adapter": "R/adapters-neuroim2.R converts neuroim2 object to internal payload and reconstructs output while preserving affine/header.",
+      "exported_cpp_entrypoints": [
+        "cpp_volreg_estimate",
+        "cpp_volreg_apply",
+        "cpp_fit_pose_spline",
+        "cpp_volreg_metrics"
+      ]
+    },
+    "cpp_architecture": {
+      "source_layout": [
+        "api_estimate.cpp",
+        "api_apply.cpp",
+        "api_qc.cpp",
+        "se3.*",
+        "pyramid.*",
+        "preprocess_localnorm.*",
+        "solver_lm.*",
+        "template_builder.*",
+        "resample4d.*",
+        "pose_spline.*",
+        "qc_metrics.*"
+      ],
+      "core_structs": [
+        "Geom",
+        "Pose6",
+        "SolverCtrl",
+        "FrameFit"
+      ],
+      "memory_model": [
+        "Use R column-major compatible 4D indexing.",
+        "Accept double from R; use float working buffers where safe.",
+        "Keep transforms/Hessian/cost accumulation in double."
+      ]
+    },
+    "algorithmic_details": {
+      "objective_v1": "Robust local-normalized contrast objective with Huber penalty and composite spatial-temporal-overlap weights.",
+      "weight_formula": "w_i = M_i * G_i^0.5 * R_i * O_i",
+      "optimizer": "Custom LM with analytic Jacobians and SE(3) exponential-map updates.",
+      "restarts": "Triggered only on suspicious fits; small local perturbation set around predicted pose.",
+      "interpolation_policy": [
+        "Trilinear during optimization.",
+        "Final output defaults to cubic B-spline; optional Lanczos; linear for speed/debug.",
+        "Replicate padding at boundaries.",
+        "Exactly one final resample."
+      ]
+    },
+    "optional_stages": {
+      "slice_aware_mode": [
+        "v1: spline-evaluated pose at slice/MB acquisition offsets for final resampling.",
+        "v2: optimize spline control points against packet-level residuals."
+      ],
+      "spin_history_repair": [
+        "Separate function: repair_spin_history(x, motion, mask, method='slice_gain').",
+        "Estimate slice-wise residual gains and apply temporally smoothed correction on high-confidence events."
+      ]
+    },
+    "parallelization": {
+      "parallel": [
+        "pyramid construction",
+        "local normalization",
+        "robust template build",
+        "final resampling",
+        "QC metrics",
+        "packet-wise slice resampling"
+      ],
+      "mostly_serial": [
+        "time-ordered rigid estimation with warm starts"
+      ]
+    },
+    "implementation_phases": [
+      {
+        "version": "v0.1",
+        "scope": [
+          "rigid_robust engine",
+          "middle reference",
+          "bootstrap + robust mean",
+          "multi-resolution LM",
+          "trilinear optimize + B-spline final resample",
+          "FD/DVARS/QC"
+        ]
+      },
+      {
+        "version": "v0.2",
+        "scope": [
+          "constant-velocity init",
+          "restart set",
+          "overlap taper",
+          "template subset selection"
+        ]
+      },
+      {
+        "version": "v0.3",
+        "scope": [
+          "rigid_spline final resampling",
+          "slice_times/mb_groups support",
+          "packet-aware QC"
+        ]
+      },
+      {
+        "version": "v0.4",
+        "scope": [
+          "optional spin-history repair"
+        ]
+      }
+    ]
+  },
+  "requirements": [
+    {
+      "id": "REQ-001",
+      "priority": "must",
+      "description": "Default engine SHALL perform 6-DOF rigid-body estimation across all frames and return nt x 6 motion parameters and 4x4 transforms."
+    },
+    {
+      "id": "REQ-002",
+      "priority": "must",
+      "description": "Estimator SHALL support middle-volume initialization and robust mean-template refresh for the main alignment pass."
+    },
+    {
+      "id": "REQ-003",
+      "priority": "must",
+      "description": "Estimator SHALL use multi-resolution LM/Gauss-Newton with temporal warm starts and optional constant-velocity initialization."
+    },
+    {
+      "id": "REQ-004",
+      "priority": "must",
+      "description": "Cost SHALL be robust local-normalized contrast with Huber-like reweighting and support composite weights M, G, R, O."
+    },
+    {
+      "id": "REQ-005",
+      "priority": "must",
+      "description": "Pipeline SHALL perform exactly one final output resampling step unless user explicitly requests otherwise in future advanced APIs."
+    },
+    {
+      "id": "REQ-006",
+      "priority": "must",
+      "description": "Package SHALL expose a compact R API: volreg, estimate_motion, apply_motion, motion_qc, framewise_disp, dvars."
+    },
+    {
+      "id": "REQ-007",
+      "priority": "must",
+      "description": "Core heavy computation SHALL run in coarse-grained C++ kernels with no per-frame R loops in estimation path."
+    },
+    {
+      "id": "REQ-008",
+      "priority": "must",
+      "description": "QC output SHALL include per-frame cost_init, cost_final, iterations, restart flag, overlap, FD, DVARS/robust DVARS, and fit flags."
+    },
+    {
+      "id": "REQ-009",
+      "priority": "should",
+      "description": "Engine rigid_spline SHOULD support slice_times/mb_groups for slice/packet-aware final resampling."
+    },
+    {
+      "id": "REQ-010",
+      "priority": "should",
+      "description": "Optional spin-history repair SHOULD be available as a separate stage/function, not coupled to rigid solver internals."
+    },
+    {
+      "id": "REQ-011",
+      "priority": "must",
+      "description": "Implementation SHALL preserve neuroim2-like affine/header metadata when roundtripping corrected output."
+    },
+    {
+      "id": "REQ-012",
+      "priority": "should",
+      "description": "Interpolation options SHOULD include bspline default, lanczos optional, linear debug path; optimization interpolation remains trilinear."
+    }
+  ],
+  "acceptance_criteria": [
+    {
+      "id": "AC-001",
+      "requirement_ids": [
+        "REQ-001",
+        "REQ-006"
+      ],
+      "criterion": "Calling volreg() on valid 4D input returns class volregger_fit with motion matrix nt x 6, transform matrices, and expected fields.",
+      "verification": "unit_test",
+      "test_hint": "Shape/type checks and class contract checks on synthetic dataset.",
+      "status_metric": "pass_fail"
+    },
+    {
+      "id": "AC-002",
+      "requirement_ids": [
+        "REQ-002",
+        "REQ-003"
+      ],
+      "criterion": "Estimator uses middle-volume bootstrap and completes outward solve in both temporal directions with warm starts.",
+      "verification": "unit_test_with_instrumentation",
+      "test_hint": "Inspect trace logs/control hooks to confirm traversal order and init source.",
+      "status_metric": "pass_fail"
+    },
+    {
+      "id": "AC-003",
+      "requirement_ids": [
+        "REQ-004"
+      ],
+      "criterion": "Local-normalized robust objective yields finite residuals and stable convergence on canonical EPI-like synthetic data with bias field and outlier voxels.",
+      "verification": "property_test",
+      "test_hint": "Randomized synthetic volumes with additive drift/outliers; assert finite costs and monotonic or near-monotonic reduction per level.",
+      "status_metric": "pass_fail"
+    },
+    {
+      "id": "AC-004",
+      "requirement_ids": [
+        "REQ-005",
+        "REQ-012"
+      ],
+      "criterion": "Pipeline performs one final resample; optimization uses trilinear only; final interpolation mode matches requested option.",
+      "verification": "unit_test_with_spy",
+      "test_hint": "Hook sampler call counters and interpolation mode flags.",
+      "status_metric": "pass_fail"
+    },
+    {
+      "id": "AC-005",
+      "requirement_ids": [
+        "REQ-007"
+      ],
+      "criterion": "Estimation path executes in coarse-grained C++ entrypoint without per-frame R looping.",
+      "verification": "code_review_plus_profile",
+      "test_hint": "Profile and inspect R wrapper; ensure single C++ call for estimation.",
+      "status_metric": "pass_fail"
+    },
+    {
+      "id": "AC-006",
+      "requirement_ids": [
+        "REQ-008"
+      ],
+      "criterion": "QC output includes all required frame-level metrics and at least one derived censor recommendation flag.",
+      "verification": "unit_test",
+      "test_hint": "Contract test for expected columns/fields and bitmask decoding.",
+      "status_metric": "pass_fail"
+    },
+    {
+      "id": "AC-007",
+      "requirement_ids": [
+        "REQ-011"
+      ],
+      "criterion": "Corrected output preserves input geometric metadata (affine orientation, voxel dimensions, time dimension) within exact or defined tolerance.",
+      "verification": "unit_test",
+      "test_hint": "Roundtrip neuroim2 adapter test.",
+      "status_metric": "pass_fail"
+    },
+    {
+      "id": "AC-008",
+      "requirement_ids": [
+        "REQ-001",
+        "REQ-003",
+        "REQ-004"
+      ],
+      "criterion": "On identity-motion synthetic input, recovered motion parameters remain near zero and corrected output is nearly unchanged.",
+      "verification": "differential_test",
+      "test_hint": "Set strict near-zero bounds for parameters and RMSE delta.",
+      "status_metric": "threshold",
+      "thresholds": {
+        "translation_mm_abs_max": 0.1,
+        "rotation_deg_abs_max": 0.1,
+        "rmse_ratio_max": 1.01
+      }
+    },
+    {
+      "id": "AC-009",
+      "requirement_ids": [
+        "REQ-001",
+        "REQ-003",
+        "REQ-004"
+      ],
+      "criterion": "On synthetic known rigid transforms, median parameter error meets baseline target.",
+      "verification": "oracle_test",
+      "test_hint": "Apply known framewise transforms to static template and compare recovered vs ground truth.",
+      "status_metric": "threshold",
+      "thresholds": {
+        "median_translation_error_mm_max": 0.3,
+        "median_rotation_error_deg_max": 0.3
+      }
+    },
+    {
+      "id": "AC-010",
+      "requirement_ids": [
+        "REQ-003"
+      ],
+      "criterion": "Restart mechanism triggers on intentionally perturbed bad initializations and improves final cost for a majority of triggered frames.",
+      "verification": "adversarial_test",
+      "test_hint": "Inject poor initial poses and assert cost improvement after restart branch.",
+      "status_metric": "threshold",
+      "thresholds": {
+        "improved_triggered_frames_fraction_min": 0.7
+      }
+    },
+    {
+      "id": "AC-011",
+      "requirement_ids": [
+        "REQ-009"
+      ],
+      "criterion": "rigid_spline mode accepts slice_times/mb_groups and produces packet-time-varying pose application in final resampling.",
+      "verification": "unit_test_with_instrumentation",
+      "test_hint": "Assert pose evaluation times differ from volume center times when offsets are provided.",
+      "status_metric": "pass_fail"
+    },
+    {
+      "id": "AC-012",
+      "requirement_ids": [
+        "REQ-010"
+      ],
+      "criterion": "Spin-history repair runs as separate callable stage and is not required for successful rigid estimation/apply pipeline.",
+      "verification": "unit_test",
+      "test_hint": "Independent function contract and integration smoke test.",
+      "status_metric": "pass_fail"
+    },
+    {
+      "id": "AC-013",
+      "requirement_ids": [
+        "REQ-001",
+        "REQ-007"
+      ],
+      "criterion": "Boundary handling with replicate padding avoids catastrophic edge artifacts on shifted volumes at FOV boundaries.",
+      "verification": "metamorphic_test",
+      "test_hint": "Translate synthetic volume near boundaries and compare zero vs replicate padding artifact metrics.",
+      "status_metric": "threshold",
+      "thresholds": {
+        "edge_artifact_score_replicate_vs_zero_ratio_max": 0.75
+      }
+    },
+    {
+      "id": "AC-014",
+      "requirement_ids": [
+        "REQ-001",
+        "REQ-003",
+        "REQ-007"
+      ],
+      "criterion": "Runtime for representative dataset remains within target envelope on reference hardware.",
+      "verification": "performance_benchmark",
+      "test_hint": "Benchmark nt=300, 64x64x48 synthetic/real-like run with default control.",
+      "status_metric": "threshold",
+      "thresholds": {
+        "runtime_seconds_max_reference_machine": 45.0,
+        "peak_memory_gb_max_reference_machine": 2.5
+      },
+      "notes": "Reference machine spec must be versioned in benchmark config."
+    },
+    {
+      "id": "AC-015",
+      "requirement_ids": [
+        "REQ-008"
+      ],
+      "criterion": "FD and DVARS outputs are deterministic under fixed seed and unchanged code/dependency versions.",
+      "verification": "regression_test",
+      "test_hint": "Re-run metrics on fixed fixture; compare numeric output with tolerance.",
+      "status_metric": "threshold",
+      "thresholds": {
+        "fd_abs_diff_max": 1e-08,
+        "dvars_abs_diff_max": 1e-08
+      }
+    }
+  ],
+  "test_strategy": {
+    "contract_first": {
+      "preconditions": [
+        "Input must be 4D numeric array-like volume.",
+        "Mask dimensions must match spatial dimensions.",
+        "slice_times and mb_groups lengths must be valid for nz or packet count."
+      ],
+      "postconditions": [
+        "Returned transform count equals nt.",
+        "All costs and QC metrics finite unless frame flagged invalid.",
+        "Output geometry metadata preserved on rebuild."
+      ],
+      "invariants": [
+        "SE(3) update composition used for pose updates.",
+        "Single final resampling in standard path.",
+        "Warm-start temporal ordering from reference outward."
+      ]
+    },
+    "required_families": [
+      "contract tests",
+      "differential/oracle tests",
+      "metamorphic tests",
+      "property/fuzz tests",
+      "adversarial edge tests",
+      "regression tests",
+      "performance guardrails"
+    ],
+    "ci_pyramid": {
+      "pr_fast": [
+        "API contracts",
+        "identity and synthetic shift smoke tests",
+        "QC field contracts",
+        "single-resample invariant"
+      ],
+      "pr_or_nightly_reference": [
+        "full synthetic transform recovery battery",
+        "rigid_spline packet-time tests"
+      ],
+      "nightly_stress_perf": [
+        "fuzz/adversarial conditioning cases",
+        "runtime + memory benchmark suite"
+      ]
+    }
+  },
+  "risks_and_mitigations": [
+    {
+      "risk": "Reference bias from poor initial frame.",
+      "mitigation": "Bootstrap alignment plus robust template rebuild and optional second refresh."
+    },
+    {
+      "risk": "Local minima on high-motion frames.",
+      "mitigation": "Temporal warm starts plus targeted tiny restart set and frame flags."
+    },
+    {
+      "risk": "Over-smoothing from interpolation and repeated resampling.",
+      "mitigation": "Trilinear during optimization and exactly one high-order final resample."
+    },
+    {
+      "risk": "False confidence from successful realignment despite residual artifacts.",
+      "mitigation": "Expose QC flags, optional rigid_spline and optional spin-history repair."
+    },
+    {
+      "risk": "Performance regression from fragmented R/C++ calls.",
+      "mitigation": "Use coarse-grained C++ entrypoints and benchmark guardrails."
+    }
+  ],
+  "delivery_plan": [
+    {
+      "milestone": "M1",
+      "target_version": "v0.1",
+      "done_when": [
+        "REQ-001..REQ-008 satisfied for rigid_robust baseline",
+        "AC-001..AC-009 pass"
+      ]
+    },
+    {
+      "milestone": "M2",
+      "target_version": "v0.2",
+      "done_when": [
+        "Restart and overlap taper finalized",
+        "AC-010 and expanded adversarial tests pass"
+      ]
+    },
+    {
+      "milestone": "M3",
+      "target_version": "v0.3",
+      "done_when": [
+        "rigid_spline mode available",
+        "AC-011 passes on slice/MB fixtures"
+      ]
+    },
+    {
+      "milestone": "M4",
+      "target_version": "v0.4",
+      "done_when": [
+        "spin-history repair stage integrated as optional module",
+        "AC-012 and related QC checks pass"
+      ]
+    }
+  ]
+}

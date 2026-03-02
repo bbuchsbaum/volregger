@@ -1,0 +1,32 @@
+volregger benchmark
+fixture_dim: 24x24x10x20 
+elapsed_sec: 2.557 
+user_sec: 2.552 
+sys_sec: 0.001 
+motion_rows: 20 
+motion_cols: 6 
+qc_fields: censor_suggest,cost_drop,dvars,fd,fit_failure,motion_spike,robust_dvars 
+fit_bytes: 1000840 
+session_info:
+R version 4.5.1 (2025-06-13)
+Platform: aarch64-apple-darwin20
+Running under: macOS Sonoma 14.3
+
+Matrix products: default
+BLAS:   /Library/Frameworks/R.framework/Versions/4.5-arm64/Resources/lib/libRblas.0.dylib 
+LAPACK: /Library/Frameworks/R.framework/Versions/4.5-arm64/Resources/lib/libRlapack.dylib;  LAPACK version 3.12.1
+
+locale:
+[1] C
+
+time zone: America/Toronto
+tzcode source: internal
+
+attached base packages:
+[1] stats     graphics  grDevices utils     datasets  methods   base     
+
+other attached packages:
+[1] volregger_0.0.1
+
+loaded via a namespace (and not attached):
+[1] compiler_4.5.1 tools_4.5.1    Rcpp_1.1.1    
