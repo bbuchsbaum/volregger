@@ -41,8 +41,11 @@ test_that("estimate_motion detects known translation perturbation", {
   est <- estimate_motion(x, control = utils::modifyList(volreg_control(), list(max_iter = 8L, n_samples = 2000L)))
 
   expect_equal(dim(est$par), c(3, 6))
-  expect_true(abs(est$par[2, 1]) > 0.3)
-  expect_true(est$cost_final[2] < est$cost_init[2])
+  # Middle-frame reference implies the shifted frame is near zero and
+  # neighboring frames carry the compensating translation.
+  expect_true(abs(est$par[2, 1]) < 0.3)
+  expect_true(max(abs(est$par[c(1, 3), 1])) > 0.3)
+  expect_true(any(est$cost_final[c(1, 3)] < est$cost_init[c(1, 3)]))
 })
 
 test_that("apply_motion applies translation components", {

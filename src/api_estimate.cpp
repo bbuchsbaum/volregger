@@ -24,13 +24,24 @@ struct Pose6 {
   double rz;
 };
 
+double wrap_pi(double a) {
+  const double two_pi = 2.0 * M_PI;
+  while (a > M_PI) {
+    a -= two_pi;
+  }
+  while (a < -M_PI) {
+    a += two_pi;
+  }
+  return a;
+}
+
 Pose6 make_pose(double tx = 0.0,
                 double ty = 0.0,
                 double tz = 0.0,
                 double rx = 0.0,
                 double ry = 0.0,
                 double rz = 0.0) {
-  return Pose6{tx, ty, tz, rx, ry, rz};
+  return Pose6{tx, ty, tz, wrap_pi(rx), wrap_pi(ry), wrap_pi(rz)};
 }
 
 Pose6 add_pose(const Pose6& a, const Pose6& b) {
@@ -105,6 +116,16 @@ NumericVector trimmed_mean_template(const NumericVector& data,
   return out;
 }
 
+double quantile_inplace(std::vector<double>& x, double q) {
+  if (x.empty()) {
+    return 0.0;
+  }
+  q = std::max(0.0, std::min(1.0, q));
+  size_t k = static_cast<size_t>(std::floor(q * static_cast<double>(x.size() - 1)));
+  std::nth_element(x.begin(), x.begin() + static_cast<std::ptrdiff_t>(k), x.end());
+  return x[k];
+}
+
 LogicalVector build_mask(const Nullable<LogicalVector>& mask, int nxyz) {
   if (mask.isNotNull()) {
     LogicalVector m(mask);
@@ -114,6 +135,49 @@ LogicalVector build_mask(const Nullable<LogicalVector>& mask, int nxyz) {
     return m;
   }
   return LogicalVector(nxyz, true);
+}
+
+LogicalVector auto_mask_from_template(const NumericVector& tmpl, int nxyz) {
+  std::vector<double> vals;
+  vals.reserve(nxyz);
+  for (int v = 0; v < nxyz; ++v) {
+    double tv = tmpl[v];
+    if (R_finite(tv)) {
+      vals.push_back(tv);
+    }
+  }
+  if (vals.empty()) {
+    return LogicalVector(nxyz, true);
+  }
+
+  std::vector<double> vals_med = vals;
+  double med = quantile_inplace(vals_med, 0.5);
+
+  std::vector<double> absdev;
+  absdev.reserve(vals.size());
+  for (size_t i = 0; i < vals.size(); ++i) {
+    absdev.push_back(std::abs(vals[i] - med));
+  }
+  double thr = quantile_inplace(absdev, 0.7);
+  if (thr <= 0.0) {
+    thr = quantile_inplace(absdev, 0.5);
+  }
+
+  LogicalVector m(nxyz, false);
+  int kept = 0;
+  for (int v = 0; v < nxyz; ++v) {
+    bool keep = R_finite(tmpl[v]) && std::abs(tmpl[v] - med) >= thr;
+    m[v] = keep;
+    if (keep) {
+      kept++;
+    }
+  }
+
+  double frac = static_cast<double>(kept) / static_cast<double>(nxyz);
+  if (frac < 0.05 || frac > 0.95) {
+    return LogicalVector(nxyz, true);
+  }
+  return m;
 }
 
 NumericMatrix identity_mats(int nt) {
@@ -150,6 +214,9 @@ struct CostResult {
   double cost;
   double overlap;
 };
+
+bool solve_linear6(double* A, double* b, double* x);
+bool solve_linear_small(double* A, double* b, int n, double* x);
 
 double sample_trilinear_frame(const NumericVector& data,
                               int nx,
@@ -254,7 +321,8 @@ CostResult evaluate_cost(const NumericVector& data,
                          const NumericVector& pixdim,
                          const std::vector<int>& sample_points,
                          const Pose6& pose,
-                         double huber_k) {
+                         double huber_k,
+                         bool use_overlap_taper) {
   double ss = 0.0;
   double n = 0.0;
   double inb = 0.0;
@@ -268,11 +336,11 @@ CostResult evaluate_cost(const NumericVector& data,
 
     bool in_bounds = false;
     fixed_to_moving_vox(i, j, k, nx, ny, nz, pixdim, pose, src, &in_bounds);
+    double mv = 0.0;
     if (in_bounds) {
+      mv = sample_trilinear_frame(data, nx, ny, nz, nxyz, t, src[0], src[1], src[2]);
       inb += 1.0;
     }
-
-    double mv = sample_trilinear_frame(data, nx, ny, nz, nxyz, t, src[0], src[1], src[2]);
     double r = mv - tmpl[v];
     double ar = std::abs(r);
 
@@ -288,9 +356,18 @@ CostResult evaluate_cost(const NumericVector& data,
   }
 
   if (n <= 0.0) {
-    return CostResult{0.0, 0.0};
+    return CostResult{1e12, 0.0};
   }
-  return CostResult{ss / n, inb / n};
+  double overlap = inb / n;
+  double c = ss / n;
+  if (use_overlap_taper) {
+    double miss = 1.0 - overlap;
+    c *= (1.0 + 4.0 * miss * miss);
+  }
+  if (overlap <= 0.0) {
+    c = 1e12;
+  }
+  return CostResult{c, overlap};
 }
 
 std::vector<int> make_sample_points(const LogicalVector& mask, int nxyz, int target) {
@@ -318,6 +395,801 @@ std::vector<int> make_sample_points(const LogicalVector& mask, int nxyz, int tar
     out.push_back(all[idx]);
   }
   return out;
+}
+
+struct StencilPoint {
+  int v;
+  int i;
+  int j;
+  int k;
+  double tval;
+  double jcol[6];
+  double jwhite[6];
+  double bvec[5];
+  double w0;
+};
+
+struct WhitenMetric {
+  bool ok;
+  double L[36];
+  double Linv[36];
+  double LinvT[36];
+};
+
+void set_identity6(double* M) {
+  for (int i = 0; i < 36; ++i) {
+    M[i] = 0.0;
+  }
+  for (int i = 0; i < 6; ++i) {
+    M[i * 6 + i] = 1.0;
+  }
+}
+
+bool chol6_lower(const double* A, double* L) {
+  for (int i = 0; i < 36; ++i) {
+    L[i] = 0.0;
+  }
+  for (int i = 0; i < 6; ++i) {
+    for (int j = 0; j <= i; ++j) {
+      double s = A[i * 6 + j];
+      for (int k = 0; k < j; ++k) {
+        s -= L[i * 6 + k] * L[j * 6 + k];
+      }
+      if (i == j) {
+        if (s <= 1e-12 || !R_finite(s)) {
+          return false;
+        }
+        L[i * 6 + j] = std::sqrt(s);
+      } else {
+        L[i * 6 + j] = s / L[j * 6 + j];
+      }
+    }
+  }
+  return true;
+}
+
+bool invert_lower6(const double* L, double* Linv) {
+  for (int i = 0; i < 36; ++i) {
+    Linv[i] = 0.0;
+  }
+  for (int c = 0; c < 6; ++c) {
+    for (int i = 0; i < 6; ++i) {
+      double s = (i == c) ? 1.0 : 0.0;
+      for (int k = 0; k < i; ++k) {
+        s -= L[i * 6 + k] * Linv[k * 6 + c];
+      }
+      double d = L[i * 6 + i];
+      if (std::abs(d) < 1e-12 || !R_finite(d)) {
+        return false;
+      }
+      Linv[i * 6 + c] = s / d;
+    }
+  }
+  return true;
+}
+
+WhitenMetric build_whiten_metric(const std::vector<StencilPoint>& stencil, double reg_scale) {
+  WhitenMetric wm;
+  wm.ok = false;
+  set_identity6(wm.L);
+  set_identity6(wm.Linv);
+  set_identity6(wm.LinvT);
+
+  if (stencil.empty()) {
+    return wm;
+  }
+
+  double H[36] = {0};
+  for (size_t s = 0; s < stencil.size(); ++s) {
+    const StencilPoint& p = stencil[s];
+    for (int a = 0; a < 6; ++a) {
+      for (int b = a; b < 6; ++b) {
+        H[a * 6 + b] += p.w0 * p.jcol[a] * p.jcol[b];
+      }
+    }
+  }
+  for (int a = 0; a < 6; ++a) {
+    for (int b = a + 1; b < 6; ++b) {
+      H[b * 6 + a] = H[a * 6 + b];
+    }
+  }
+
+  double tr = 0.0;
+  for (int a = 0; a < 6; ++a) {
+    tr += H[a * 6 + a];
+  }
+  double eps = std::max(1e-8, std::max(0.0, reg_scale) * std::max(1.0, tr / 6.0));
+  for (int a = 0; a < 6; ++a) {
+    H[a * 6 + a] += eps;
+  }
+
+  if (!chol6_lower(H, wm.L)) {
+    return wm;
+  }
+  if (!invert_lower6(wm.L, wm.Linv)) {
+    return wm;
+  }
+  for (int i = 0; i < 6; ++i) {
+    for (int j = 0; j < 6; ++j) {
+      wm.LinvT[i * 6 + j] = wm.Linv[j * 6 + i];
+    }
+  }
+  wm.ok = true;
+  return wm;
+}
+
+void apply_whiten_metric_to_stencil(std::vector<StencilPoint>* stencil, const WhitenMetric& wm) {
+  if (stencil == nullptr) {
+    return;
+  }
+  for (size_t s = 0; s < stencil->size(); ++s) {
+    StencilPoint& p = (*stencil)[s];
+    for (int a = 0; a < 6; ++a) {
+      double v = 0.0;
+      for (int b = 0; b < 6; ++b) {
+        v += p.jcol[b] * wm.LinvT[b * 6 + a];
+      }
+      p.jwhite[a] = v;
+    }
+  }
+}
+
+void copy_raw_jacobian_to_whitened(std::vector<StencilPoint>* stencil) {
+  if (stencil == nullptr) {
+    return;
+  }
+  for (size_t s = 0; s < stencil->size(); ++s) {
+    for (int a = 0; a < 6; ++a) {
+      (*stencil)[s].jwhite[a] = (*stencil)[s].jcol[a];
+    }
+  }
+}
+
+inline double template_at_vox(const NumericVector& tmpl,
+                              int nx,
+                              int ny,
+                              int nz,
+                              int i,
+                              int j,
+                              int k) {
+  i = clamp_int(i, 0, nx - 1);
+  j = clamp_int(j, 0, ny - 1);
+  k = clamp_int(k, 0, nz - 1);
+  return tmpl[i + nx * (j + ny * k)];
+}
+
+void template_gradient_vox(const NumericVector& tmpl,
+                           int nx,
+                           int ny,
+                           int nz,
+                           int i,
+                           int j,
+                           int k,
+                           double* gx,
+                           double* gy,
+                           double* gz) {
+  *gx = 0.5 * (template_at_vox(tmpl, nx, ny, nz, i + 1, j, k) -
+               template_at_vox(tmpl, nx, ny, nz, i - 1, j, k));
+  *gy = 0.5 * (template_at_vox(tmpl, nx, ny, nz, i, j + 1, k) -
+               template_at_vox(tmpl, nx, ny, nz, i, j - 1, k));
+  *gz = 0.5 * (template_at_vox(tmpl, nx, ny, nz, i, j, k + 1) -
+               template_at_vox(tmpl, nx, ny, nz, i, j, k - 1));
+}
+
+std::vector<double> temporal_reliability_map(const NumericVector& data, int nxyz, int nt) {
+  std::vector<double> rel(nxyz, 1.0);
+  if (nt <= 1) {
+    return rel;
+  }
+
+  for (int v = 0; v < nxyz; ++v) {
+    double m = 0.0;
+    for (int t = 0; t < nt; ++t) {
+      m += data[static_cast<size_t>(v + nxyz * t)];
+    }
+    m /= static_cast<double>(nt);
+
+    double ss = 0.0;
+    for (int t = 0; t < nt; ++t) {
+      double d = data[static_cast<size_t>(v + nxyz * t)] - m;
+      ss += d * d;
+    }
+    double sd = std::sqrt(ss / std::max(1.0, static_cast<double>(nt - 1)));
+    rel[v] = 1.0 / (1.0 + sd);
+  }
+
+  std::vector<double> rel_copy = rel;
+  double hi = quantile_inplace(rel_copy, 0.95);
+  if (hi <= 0.0 || !R_finite(hi)) {
+    return rel;
+  }
+  for (int v = 0; v < nxyz; ++v) {
+    double r = rel[v] / hi;
+    rel[v] = std::max(0.05, std::min(1.0, r));
+  }
+  return rel;
+}
+
+std::vector<StencilPoint> build_ic_stencil(const NumericVector& tmpl,
+                                           const NumericVector& data,
+                                           int nx,
+                                           int ny,
+                                           int nz,
+                                           int nt,
+                                           int nxyz,
+                                           const NumericVector& pixdim,
+                                           const LogicalVector& mask,
+                                           int target_points,
+                                           int blocks_x,
+                                           int blocks_y,
+                                           int blocks_z,
+                                           double gamma) {
+  struct Candidate {
+    int v;
+    int i;
+    int j;
+    int k;
+    int bid;
+    double gx;
+    double gy;
+    double gz;
+    double score;
+  };
+
+  target_points = std::max(256, target_points);
+  blocks_x = std::max(1, blocks_x);
+  blocks_y = std::max(1, blocks_y);
+  blocks_z = std::max(1, blocks_z);
+  gamma = std::max(0.0, gamma);
+
+  std::vector<double> rel = temporal_reliability_map(data, nxyz, nt);
+  std::vector<Candidate> candidates;
+  candidates.reserve(nxyz / 4);
+
+  double cx = 0.5 * (nx - 1.0);
+  double cy = 0.5 * (ny - 1.0);
+  double cz = 0.5 * (nz - 1.0);
+
+  int nblocks = blocks_x * blocks_y * blocks_z;
+  std::vector<std::vector<int>> bins(nblocks);
+
+  for (int k = 1; k < nz - 1; ++k) {
+    for (int j = 1; j < ny - 1; ++j) {
+      for (int i = 1; i < nx - 1; ++i) {
+        int v = i + nx * (j + ny * k);
+        if (mask[v] != TRUE) {
+          continue;
+        }
+
+        double gx = 0.0, gy = 0.0, gz = 0.0;
+        template_gradient_vox(tmpl, nx, ny, nz, i, j, k, &gx, &gy, &gz);
+        double gmag = std::sqrt(gx * gx + gy * gy + gz * gz);
+        if (gmag < 1e-6 || !R_finite(gmag)) {
+          continue;
+        }
+
+        double xw = (i - cx) * pixdim[0];
+        double yw = (j - cy) * pixdim[1];
+        double zw = (k - cz) * pixdim[2];
+
+        double c1 = yw * gz - zw * gy;
+        double c2 = zw * gx - xw * gz;
+        double c3 = xw * gy - yw * gx;
+        double leverage = std::sqrt(c1 * c1 + c2 * c2 + c3 * c3) + 0.25 * gmag;
+
+        double score = std::pow(gmag, gamma) * rel[v] * leverage;
+        if (!R_finite(score) || score <= 0.0) {
+          continue;
+        }
+
+        int bi = std::min(blocks_x - 1, (i * blocks_x) / nx);
+        int bj = std::min(blocks_y - 1, (j * blocks_y) / ny);
+        int bk = std::min(blocks_z - 1, (k * blocks_z) / nz);
+        int bid = bi + blocks_x * (bj + blocks_y * bk);
+
+        int id = static_cast<int>(candidates.size());
+        candidates.push_back(Candidate{v, i, j, k, bid, gx, gy, gz, score});
+        bins[bid].push_back(id);
+      }
+    }
+  }
+
+  if (candidates.empty()) {
+    return {};
+  }
+
+  auto by_score = [&](int a, int b) { return candidates[a].score > candidates[b].score; };
+  for (int b = 0; b < nblocks; ++b) {
+    std::sort(bins[b].begin(), bins[b].end(), by_score);
+  }
+
+  std::vector<int> selected;
+  selected.reserve(target_points);
+  std::vector<int> cursor(nblocks, 0);
+  int per_block = std::max(1, target_points / nblocks);
+
+  for (int b = 0; b < nblocks; ++b) {
+    int take = std::min(per_block, static_cast<int>(bins[b].size()));
+    for (int n = 0; n < take; ++n) {
+      selected.push_back(bins[b][n]);
+    }
+    cursor[b] = take;
+  }
+
+  if (static_cast<int>(selected.size()) < target_points) {
+    std::vector<int> rest;
+    for (int b = 0; b < nblocks; ++b) {
+      for (int n = cursor[b]; n < static_cast<int>(bins[b].size()); ++n) {
+        rest.push_back(bins[b][n]);
+      }
+    }
+    std::sort(rest.begin(), rest.end(), by_score);
+    int need = target_points - static_cast<int>(selected.size());
+    for (int n = 0; n < need && n < static_cast<int>(rest.size()); ++n) {
+      selected.push_back(rest[n]);
+    }
+  }
+
+  if (selected.empty()) {
+    return {};
+  }
+
+  if (static_cast<int>(selected.size()) > target_points) {
+    std::sort(selected.begin(), selected.end(), by_score);
+    selected.resize(target_points);
+  }
+
+  double max_score = 0.0;
+  for (size_t s = 0; s < selected.size(); ++s) {
+    max_score = std::max(max_score, candidates[selected[s]].score);
+  }
+  if (max_score <= 0.0 || !R_finite(max_score)) {
+    max_score = 1.0;
+  }
+
+  std::vector<StencilPoint> stencil;
+  stencil.reserve(selected.size());
+
+  double invdx = 1.0 / pixdim[0];
+  double invdy = 1.0 / pixdim[1];
+  double invdz = 1.0 / pixdim[2];
+
+  for (size_t s = 0; s < selected.size(); ++s) {
+    const Candidate& c = candidates[selected[s]];
+    double xw = (c.i - cx) * pixdim[0];
+    double yw = (c.j - cy) * pixdim[1];
+    double zw = (c.k - cz) * pixdim[2];
+
+    StencilPoint p;
+    p.v = c.v;
+    p.i = c.i;
+    p.j = c.j;
+    p.k = c.k;
+    p.tval = tmpl[c.v];
+    p.w0 = std::max(0.05, std::min(1.0, c.score / max_score));
+
+    // Translation terms.
+    p.jcol[0] = c.gx * (-invdx);
+    p.jcol[1] = c.gy * (-invdy);
+    p.jcol[2] = c.gz * (-invdz);
+    // Rotation terms at identity using d(R^T x)/dtheta = -(e x x).
+    p.jcol[3] = c.gy * (zw * invdy) + c.gz * (-yw * invdz);
+    p.jcol[4] = c.gx * (-zw * invdx) + c.gz * (xw * invdz);
+    p.jcol[5] = c.gx * (yw * invdx) + c.gy * (-xw * invdy);
+    for (int a = 0; a < 6; ++a) {
+      p.jwhite[a] = p.jcol[a];
+    }
+    for (int q = 0; q < 5; ++q) {
+      p.bvec[q] = 0.0;
+    }
+
+    stencil.push_back(p);
+  }
+
+  return stencil;
+}
+
+CostResult evaluate_cost_stencil(const NumericVector& data,
+                                 int nx,
+                                 int ny,
+                                 int nz,
+                                 int nxyz,
+                                 int t,
+                                 const NumericVector& pixdim,
+                                 const std::vector<StencilPoint>& stencil,
+                                 const Pose6& pose,
+                                 double huber_k,
+                                 bool use_overlap_taper) {
+  double ss = 0.0;
+  double wsum = 0.0;
+  double inb = 0.0;
+  double src[3];
+
+  for (size_t s = 0; s < stencil.size(); ++s) {
+    const StencilPoint& p = stencil[s];
+    bool in_bounds = false;
+    fixed_to_moving_vox(p.i, p.j, p.k, nx, ny, nz, pixdim, pose, src, &in_bounds);
+
+    double mv = 0.0;
+    if (in_bounds) {
+      mv = sample_trilinear_frame(data, nx, ny, nz, nxyz, t, src[0], src[1], src[2]);
+      inb += p.w0;
+    }
+
+    double r = mv - p.tval;
+    double ar = std::abs(r);
+    double rho = (ar <= huber_k) ? (r * r) : (2.0 * huber_k * ar - huber_k * huber_k);
+
+    ss += p.w0 * rho;
+    wsum += p.w0;
+  }
+
+  if (wsum <= 0.0) {
+    return CostResult{1e12, 0.0};
+  }
+  double overlap = inb / wsum;
+  double c = ss / wsum;
+  if (use_overlap_taper) {
+    double miss = 1.0 - overlap;
+    c *= (1.0 + 4.0 * miss * miss);
+  }
+  if (overlap <= 0.0) {
+    c = 1e12;
+  }
+  return CostResult{c, overlap};
+}
+
+int prepare_nuisance_basis(std::vector<StencilPoint>* stencil,
+                           int nx,
+                           int ny,
+                           int nz,
+                           bool include_template,
+                           bool orthogonalize,
+                           bool use_whiten_jacobian,
+                           double orth_reg) {
+  if (stencil == nullptr || stencil->empty()) {
+    return 0;
+  }
+
+  int p = include_template ? 5 : 4;  // [1, tmpl?, x, y, z]
+  double cx = 0.5 * (nx - 1.0);
+  double cy = 0.5 * (ny - 1.0);
+  double cz = 0.5 * (nz - 1.0);
+  double sx = std::max(1.0, cx);
+  double sy = std::max(1.0, cy);
+  double sz = std::max(1.0, cz);
+
+  for (size_t s = 0; s < stencil->size(); ++s) {
+    StencilPoint& pt = (*stencil)[s];
+    int q = 0;
+    pt.bvec[q++] = 1.0;
+    if (include_template) {
+      pt.bvec[q++] = pt.tval;
+    }
+    pt.bvec[q++] = (pt.i - cx) / sx;
+    pt.bvec[q++] = (pt.j - cy) / sy;
+    pt.bvec[q++] = (pt.k - cz) / sz;
+    for (; q < 5; ++q) {
+      pt.bvec[q] = 0.0;
+    }
+  }
+
+  // Weighted center/scale for non-constant columns.
+  for (int q = 1; q < p; ++q) {
+    double wsum = 0.0;
+    double mean = 0.0;
+    for (size_t s = 0; s < stencil->size(); ++s) {
+      const StencilPoint& pt = (*stencil)[s];
+      wsum += pt.w0;
+      mean += pt.w0 * pt.bvec[q];
+    }
+    if (wsum <= 0.0) {
+      continue;
+    }
+    mean /= wsum;
+    double var = 0.0;
+    for (size_t s = 0; s < stencil->size(); ++s) {
+      const StencilPoint& pt = (*stencil)[s];
+      double d = pt.bvec[q] - mean;
+      var += pt.w0 * d * d;
+    }
+    var /= wsum;
+    double sd = std::sqrt(std::max(var, 1e-8));
+    for (size_t s = 0; s < stencil->size(); ++s) {
+      (*stencil)[s].bvec[q] = ((*stencil)[s].bvec[q] - mean) / sd;
+    }
+  }
+
+  if (orthogonalize && p > 1) {
+    double H[36] = {0};
+    for (size_t s = 0; s < stencil->size(); ++s) {
+      const StencilPoint& pt = (*stencil)[s];
+      const double* jac = use_whiten_jacobian ? pt.jwhite : pt.jcol;
+      for (int a = 0; a < 6; ++a) {
+        for (int b = a; b < 6; ++b) {
+          H[a * 6 + b] += pt.w0 * jac[a] * jac[b];
+        }
+      }
+    }
+    for (int a = 0; a < 6; ++a) {
+      for (int b = a + 1; b < 6; ++b) {
+        H[b * 6 + a] = H[a * 6 + b];
+      }
+    }
+
+    double tr = 0.0;
+    for (int a = 0; a < 6; ++a) {
+      tr += H[a * 6 + a];
+    }
+    double reg = std::max(1e-8, std::max(0.0, orth_reg) * std::max(1.0, tr / 6.0));
+    for (int a = 0; a < 6; ++a) {
+      H[a * 6 + a] += reg;
+    }
+
+    for (int q = 1; q < p; ++q) {
+      double h[6] = {0};
+      for (size_t s = 0; s < stencil->size(); ++s) {
+        const StencilPoint& pt = (*stencil)[s];
+        const double* jac = use_whiten_jacobian ? pt.jwhite : pt.jcol;
+        for (int a = 0; a < 6; ++a) {
+          h[a] += pt.w0 * jac[a] * pt.bvec[q];
+        }
+      }
+      double A[36];
+      double rhs[6];
+      double alpha[6] = {0};
+      for (int a = 0; a < 6; ++a) {
+        rhs[a] = h[a];
+        for (int b = 0; b < 6; ++b) {
+          A[a * 6 + b] = H[a * 6 + b];
+        }
+      }
+      if (!solve_linear6(A, rhs, alpha)) {
+        continue;
+      }
+      for (size_t s = 0; s < stencil->size(); ++s) {
+        StencilPoint& pt = (*stencil)[s];
+        const double* jac = use_whiten_jacobian ? pt.jwhite : pt.jcol;
+        double proj = 0.0;
+        for (int a = 0; a < 6; ++a) {
+          proj += jac[a] * alpha[a];
+        }
+        pt.bvec[q] -= proj;
+      }
+    }
+
+    // Re-center/scale after orthogonalization.
+    for (int q = 1; q < p; ++q) {
+      double wsum = 0.0;
+      double mean = 0.0;
+      for (size_t s = 0; s < stencil->size(); ++s) {
+        const StencilPoint& pt = (*stencil)[s];
+        wsum += pt.w0;
+        mean += pt.w0 * pt.bvec[q];
+      }
+      if (wsum <= 0.0) {
+        continue;
+      }
+      mean /= wsum;
+      double var = 0.0;
+      for (size_t s = 0; s < stencil->size(); ++s) {
+        const StencilPoint& pt = (*stencil)[s];
+        double d = pt.bvec[q] - mean;
+        var += pt.w0 * d * d;
+      }
+      var /= wsum;
+      double sd = std::sqrt(std::max(var, 1e-8));
+      for (size_t s = 0; s < stencil->size(); ++s) {
+        (*stencil)[s].bvec[q] = ((*stencil)[s].bvec[q] - mean) / sd;
+      }
+    }
+  }
+
+  return p;
+}
+
+bool solve_linear_small(double* A, double* b, int n, double* x) {
+  if (n <= 0) {
+    return true;
+  }
+  for (int i = 0; i < n; ++i) {
+    int piv = i;
+    double apiv = std::abs(A[i * n + i]);
+    for (int r = i + 1; r < n; ++r) {
+      double av = std::abs(A[r * n + i]);
+      if (av > apiv) {
+        apiv = av;
+        piv = r;
+      }
+    }
+    if (apiv < 1e-12 || !R_finite(apiv)) {
+      return false;
+    }
+    if (piv != i) {
+      for (int c = i; c < n; ++c) {
+        std::swap(A[i * n + c], A[piv * n + c]);
+      }
+      std::swap(b[i], b[piv]);
+    }
+
+    double diag = A[i * n + i];
+    for (int c = i; c < n; ++c) {
+      A[i * n + c] /= diag;
+    }
+    b[i] /= diag;
+
+    for (int r = i + 1; r < n; ++r) {
+      double f = A[r * n + i];
+      if (f == 0.0) {
+        continue;
+      }
+      for (int c = i; c < n; ++c) {
+        A[r * n + c] -= f * A[i * n + c];
+      }
+      b[r] -= f * b[i];
+    }
+  }
+
+  for (int i = n - 1; i >= 0; --i) {
+    double s = b[i];
+    for (int c = i + 1; c < n; ++c) {
+      s -= A[i * n + c] * x[c];
+    }
+    x[i] = s;
+  }
+  return true;
+}
+
+CostResult evaluate_cost_stencil_nuisance(const NumericVector& data,
+                                          int nx,
+                                          int ny,
+                                          int nz,
+                                          int nxyz,
+                                          int t,
+                                          const NumericVector& pixdim,
+                                          const std::vector<StencilPoint>& stencil,
+                                          const Pose6& pose,
+                                          double huber_k,
+                                          bool use_overlap_taper,
+                                          int nuisance_dim,
+                                          double nuisance_ridge) {
+  if (nuisance_dim <= 0) {
+    return evaluate_cost_stencil(
+        data, nx, ny, nz, nxyz, t, pixdim, stencil, pose, huber_k, use_overlap_taper);
+  }
+
+  std::vector<double> residual(stencil.size(), 0.0);
+  double src[3];
+  double inb = 0.0;
+  double wsum = 0.0;
+  const int p = nuisance_dim;
+  double BtB[25] = {0};
+  double bt[5] = {0};
+
+  for (size_t s = 0; s < stencil.size(); ++s) {
+    const StencilPoint& pt = stencil[s];
+    bool in_bounds = false;
+    fixed_to_moving_vox(pt.i, pt.j, pt.k, nx, ny, nz, pixdim, pose, src, &in_bounds);
+    double mv = 0.0;
+    if (in_bounds) {
+      mv = sample_trilinear_frame(data, nx, ny, nz, nxyz, t, src[0], src[1], src[2]);
+      inb += pt.w0;
+    }
+    double r = mv - pt.tval;
+    residual[s] = r;
+    wsum += pt.w0;
+    for (int q = 0; q < p; ++q) {
+      double bq = pt.bvec[q];
+      bt[q] += pt.w0 * bq * r;
+      for (int qq = q; qq < p; ++qq) {
+        BtB[q * p + qq] += pt.w0 * bq * pt.bvec[qq];
+      }
+    }
+  }
+  if (wsum <= 0.0) {
+    return CostResult{1e12, 0.0};
+  }
+  for (int q = 0; q < p; ++q) {
+    for (int qq = q + 1; qq < p; ++qq) {
+      BtB[qq * p + q] = BtB[q * p + qq];
+    }
+  }
+
+  double tr = 0.0;
+  for (int q = 0; q < p; ++q) {
+    tr += BtB[q * p + q];
+  }
+  double eps = std::max(1e-8, std::max(0.0, nuisance_ridge) * std::max(1.0, tr / std::max(1, p)));
+  for (int q = 0; q < p; ++q) {
+    BtB[q * p + q] += eps;
+  }
+
+  double A[25];
+  double rhs[5];
+  double theta[5] = {0};
+  for (int q = 0; q < p; ++q) {
+    rhs[q] = bt[q];
+    for (int qq = 0; qq < p; ++qq) {
+      A[q * p + qq] = BtB[q * p + qq];
+    }
+  }
+  bool solved = solve_linear_small(A, rhs, p, theta);
+
+  double ss = 0.0;
+  for (size_t s = 0; s < stencil.size(); ++s) {
+    const StencilPoint& pt = stencil[s];
+    double r = residual[s];
+    if (solved) {
+      double proj = 0.0;
+      for (int q = 0; q < p; ++q) {
+        proj += pt.bvec[q] * theta[q];
+      }
+      r -= proj;
+    }
+    double ar = std::abs(r);
+    double rho = (ar <= huber_k) ? (r * r) : (2.0 * huber_k * ar - huber_k * huber_k);
+    ss += pt.w0 * rho;
+  }
+
+  double overlap = inb / wsum;
+  double c = ss / wsum;
+  if (use_overlap_taper) {
+    double miss = 1.0 - overlap;
+    c *= (1.0 + 4.0 * miss * miss);
+  }
+  if (overlap <= 0.0) {
+    c = 1e12;
+  }
+  return CostResult{c, overlap};
+}
+
+bool solve_linear6(double* A, double* b, double* x) {
+  for (int i = 0; i < 6; ++i) {
+    int piv = i;
+    double apiv = std::abs(A[i * 6 + i]);
+    for (int r = i + 1; r < 6; ++r) {
+      double av = std::abs(A[r * 6 + i]);
+      if (av > apiv) {
+        apiv = av;
+        piv = r;
+      }
+    }
+    if (apiv < 1e-10 || !R_finite(apiv)) {
+      return false;
+    }
+    if (piv != i) {
+      for (int c = i; c < 6; ++c) {
+        std::swap(A[i * 6 + c], A[piv * 6 + c]);
+      }
+      std::swap(b[i], b[piv]);
+    }
+
+    double diag = A[i * 6 + i];
+    for (int c = i; c < 6; ++c) {
+      A[i * 6 + c] /= diag;
+    }
+    b[i] /= diag;
+
+    for (int r = i + 1; r < 6; ++r) {
+      double f = A[r * 6 + i];
+      if (f == 0.0) {
+        continue;
+      }
+      for (int c = i; c < 6; ++c) {
+        A[r * 6 + c] -= f * A[i * 6 + c];
+      }
+      b[r] -= f * b[i];
+    }
+  }
+
+  for (int i = 5; i >= 0; --i) {
+    double s = b[i];
+    for (int c = i + 1; c < 6; ++c) {
+      s -= A[i * 6 + c] * x[c];
+    }
+    x[i] = s;
+  }
+  return true;
 }
 
 struct Vec3 {
@@ -399,6 +1271,381 @@ struct FrameFit {
   int flags;
 };
 
+std::vector<Pose6> build_restart_candidates(const Pose6& init_pose,
+                                            bool capture_boost,
+                                            double capture_trans_mm,
+                                            double capture_rot_deg) {
+  std::vector<Pose6> cand;
+  cand.reserve(48);
+
+  auto add_xyz = [&](double dmm) {
+    cand.push_back(make_pose(init_pose.tx + dmm, init_pose.ty, init_pose.tz, init_pose.rx, init_pose.ry, init_pose.rz));
+    cand.push_back(make_pose(init_pose.tx - dmm, init_pose.ty, init_pose.tz, init_pose.rx, init_pose.ry, init_pose.rz));
+    cand.push_back(make_pose(init_pose.tx, init_pose.ty + dmm, init_pose.tz, init_pose.rx, init_pose.ry, init_pose.rz));
+    cand.push_back(make_pose(init_pose.tx, init_pose.ty - dmm, init_pose.tz, init_pose.rx, init_pose.ry, init_pose.rz));
+    cand.push_back(make_pose(init_pose.tx, init_pose.ty, init_pose.tz + dmm, init_pose.rx, init_pose.ry, init_pose.rz));
+    cand.push_back(make_pose(init_pose.tx, init_pose.ty, init_pose.tz - dmm, init_pose.rx, init_pose.ry, init_pose.rz));
+  };
+  auto add_rxyz = [&](double ddeg) {
+    double dr = ddeg * M_PI / 180.0;
+    cand.push_back(make_pose(init_pose.tx, init_pose.ty, init_pose.tz, init_pose.rx + dr, init_pose.ry, init_pose.rz));
+    cand.push_back(make_pose(init_pose.tx, init_pose.ty, init_pose.tz, init_pose.rx - dr, init_pose.ry, init_pose.rz));
+    cand.push_back(make_pose(init_pose.tx, init_pose.ty, init_pose.tz, init_pose.rx, init_pose.ry + dr, init_pose.rz));
+    cand.push_back(make_pose(init_pose.tx, init_pose.ty, init_pose.tz, init_pose.rx, init_pose.ry - dr, init_pose.rz));
+    cand.push_back(make_pose(init_pose.tx, init_pose.ty, init_pose.tz, init_pose.rx, init_pose.ry, init_pose.rz + dr));
+    cand.push_back(make_pose(init_pose.tx, init_pose.ty, init_pose.tz, init_pose.rx, init_pose.ry, init_pose.rz - dr));
+  };
+
+  cand.push_back(make_pose());  // identity
+  add_xyz(2.0);
+  add_rxyz(2.0);
+
+  if (capture_boost) {
+    double ct = std::max(4.0, capture_trans_mm);
+    double cr = std::max(4.0, capture_rot_deg);
+    add_xyz(0.5 * ct);
+    add_rxyz(0.5 * cr);
+    add_xyz(ct);
+    add_rxyz(cr);
+  }
+  return cand;
+}
+
+template <typename EvalFn>
+std::vector<Pose6> select_best_restart_seeds(const Pose6& init_pose,
+                                             const std::vector<Pose6>& candidates,
+                                             int n_keep,
+                                             EvalFn eval_cost) {
+  std::vector<Pose6> out;
+  out.push_back(init_pose);
+  if (n_keep <= 0 || candidates.empty()) {
+    return out;
+  }
+
+  struct ScoredPose {
+    double cost;
+    Pose6 pose;
+  };
+  std::vector<ScoredPose> scored;
+  scored.reserve(candidates.size());
+  for (size_t i = 0; i < candidates.size(); ++i) {
+    double c = eval_cost(candidates[i]);
+    scored.push_back(ScoredPose{c, candidates[i]});
+  }
+  std::sort(scored.begin(), scored.end(), [](const ScoredPose& a, const ScoredPose& b) { return a.cost < b.cost; });
+  int keep = std::min(n_keep, static_cast<int>(scored.size()));
+  for (int i = 0; i < keep; ++i) {
+    out.push_back(scored[i].pose);
+  }
+  return out;
+}
+
+FrameFit optimize_frame_pose_ic(const NumericVector& data,
+                                int nx,
+                                int ny,
+                                int nz,
+                                int nxyz,
+                                int t,
+                                const NumericVector& pixdim,
+                                const std::vector<StencilPoint>& stencil,
+                                const Pose6& init_pose,
+                                int max_iter,
+                                double lambda0,
+                                double tol_step,
+                                double tol_cost,
+                                double huber_k,
+                                int n_restarts,
+                                bool use_overlap_taper,
+                                bool capture_boost,
+                                double capture_trans_mm,
+                                double capture_rot_deg,
+                                int capture_topk,
+                                bool use_whiten_modes,
+                                const double* Linv_u2xi,
+                                bool use_nuisance_marginalization,
+                                int nuisance_dim,
+                                double nuisance_ridge) {
+  bool use_nuisance = use_nuisance_marginalization && nuisance_dim > 0;
+  auto eval_pose = [&](const Pose6& pose) {
+    if (use_nuisance) {
+      return evaluate_cost_stencil_nuisance(data,
+                                            nx,
+                                            ny,
+                                            nz,
+                                            nxyz,
+                                            t,
+                                            pixdim,
+                                            stencil,
+                                            pose,
+                                            huber_k,
+                                            use_overlap_taper,
+                                            nuisance_dim,
+                                            nuisance_ridge);
+    }
+    return evaluate_cost_stencil(
+        data, nx, ny, nz, nxyz, t, pixdim, stencil, pose, huber_k, use_overlap_taper);
+  };
+
+  std::vector<Pose6> seeds;
+  int n_keep = std::max(n_restarts, capture_boost ? capture_topk : n_restarts);
+  if (n_keep > 0 || capture_boost) {
+    std::vector<Pose6> cand =
+        build_restart_candidates(init_pose, capture_boost, capture_trans_mm, capture_rot_deg);
+    seeds = select_best_restart_seeds(
+        init_pose,
+        cand,
+        n_keep,
+        [&](const Pose6& p) {
+          return eval_pose(p).cost;
+        });
+  } else {
+    seeds.push_back(init_pose);
+  }
+
+  Pose6 best_pose = init_pose;
+  CostResult best_eval = eval_pose(init_pose);
+  double best_c_init = best_eval.cost;
+  double best_c_final = best_eval.cost;
+  int best_iters = 0;
+  bool best_restart = false;
+
+  for (size_t seed_idx = 0; seed_idx < seeds.size(); ++seed_idx) {
+    Pose6 cur = seeds[seed_idx];
+    double lambda = lambda0;
+    CostResult eval0 = eval_pose(cur);
+    double c_init = eval0.cost;
+    double c_prev = c_init;
+    int used_iters = 0;
+
+    for (int iter = 0; iter < max_iter; ++iter) {
+      used_iters = iter + 1;
+      double H[36] = {0};
+      double g[6] = {0};
+      double C[30] = {0};      // 6 x max 5 nuisance columns
+      double BtB[25] = {0};    // max 5 x 5
+      double bt[5] = {0};
+      double src[3];
+      double valid_w = 0.0;
+
+      for (size_t s = 0; s < stencil.size(); ++s) {
+        const StencilPoint& p = stencil[s];
+        bool in_bounds = false;
+        fixed_to_moving_vox(p.i, p.j, p.k, nx, ny, nz, pixdim, cur, src, &in_bounds);
+        if (!in_bounds) {
+          continue;
+        }
+
+        double mv = sample_trilinear_frame(data, nx, ny, nz, nxyz, t, src[0], src[1], src[2]);
+        double r = mv - p.tval;
+        double ar = std::abs(r);
+        double wr = (ar <= huber_k) ? 1.0 : (huber_k / (ar + 1e-12));
+        double wt = p.w0 * wr;
+        valid_w += wt;
+        const double* jac = use_whiten_modes ? p.jwhite : p.jcol;
+
+        for (int a = 0; a < 6; ++a) {
+          double ja = jac[a];
+          g[a] += wt * ja * r;
+          for (int b = a; b < 6; ++b) {
+            H[a * 6 + b] += wt * ja * jac[b];
+          }
+          if (use_nuisance) {
+            for (int q = 0; q < nuisance_dim; ++q) {
+              C[a * nuisance_dim + q] += wt * ja * p.bvec[q];
+            }
+          }
+        }
+        if (use_nuisance) {
+          for (int q = 0; q < nuisance_dim; ++q) {
+            double bq = p.bvec[q];
+            bt[q] += wt * bq * r;
+            for (int qq = q; qq < nuisance_dim; ++qq) {
+              BtB[q * nuisance_dim + qq] += wt * bq * p.bvec[qq];
+            }
+          }
+        }
+      }
+
+      if (valid_w <= 0.0) {
+        break;
+      }
+      for (int a = 0; a < 6; ++a) {
+        for (int b = a + 1; b < 6; ++b) {
+          H[b * 6 + a] = H[a * 6 + b];
+        }
+      }
+
+      double Hsolve[36];
+      double gsolve[6];
+      for (int a = 0; a < 6; ++a) {
+        gsolve[a] = g[a];
+        for (int b = 0; b < 6; ++b) {
+          Hsolve[a * 6 + b] = H[a * 6 + b];
+        }
+      }
+
+      if (use_nuisance) {
+        for (int q = 0; q < nuisance_dim; ++q) {
+          for (int qq = q + 1; qq < nuisance_dim; ++qq) {
+            BtB[qq * nuisance_dim + q] = BtB[q * nuisance_dim + qq];
+          }
+        }
+
+        double trb = 0.0;
+        for (int q = 0; q < nuisance_dim; ++q) {
+          trb += BtB[q * nuisance_dim + q];
+        }
+        double eps_b =
+            std::max(1e-8,
+                     std::max(0.0, nuisance_ridge) *
+                         std::max(1.0, trb / std::max(1, nuisance_dim)));
+        for (int q = 0; q < nuisance_dim; ++q) {
+          BtB[q * nuisance_dim + q] += eps_b;
+        }
+
+        double Binv[25] = {0};
+        bool ok_b = true;
+        for (int col = 0; col < nuisance_dim; ++col) {
+          double Acol[25];
+          double rhs_col[5] = {0};
+          double x_col[5] = {0};
+          rhs_col[col] = 1.0;
+          for (int q = 0; q < nuisance_dim; ++q) {
+            for (int qq = 0; qq < nuisance_dim; ++qq) {
+              Acol[q * nuisance_dim + qq] = BtB[q * nuisance_dim + qq];
+            }
+          }
+          if (!solve_linear_small(Acol, rhs_col, nuisance_dim, x_col)) {
+            ok_b = false;
+            break;
+          }
+          for (int q = 0; q < nuisance_dim; ++q) {
+            Binv[q * nuisance_dim + col] = x_col[q];
+          }
+        }
+
+        if (ok_b) {
+          double Y[30] = {0};  // (J'WB) (B'WB)^-1
+          for (int a = 0; a < 6; ++a) {
+            for (int q = 0; q < nuisance_dim; ++q) {
+              double s = 0.0;
+              for (int qq = 0; qq < nuisance_dim; ++qq) {
+                s += C[a * nuisance_dim + qq] * Binv[qq * nuisance_dim + q];
+              }
+              Y[a * nuisance_dim + q] = s;
+            }
+          }
+          for (int a = 0; a < 6; ++a) {
+            for (int b = 0; b < 6; ++b) {
+              double sub = 0.0;
+              for (int q = 0; q < nuisance_dim; ++q) {
+                sub += Y[a * nuisance_dim + q] * C[b * nuisance_dim + q];
+              }
+              Hsolve[a * 6 + b] -= sub;
+            }
+            double subg = 0.0;
+            for (int q = 0; q < nuisance_dim; ++q) {
+              subg += Y[a * nuisance_dim + q] * bt[q];
+            }
+            gsolve[a] -= subg;
+          }
+        }
+      }
+
+      double A[36];
+      double rhs[6];
+      double delta_v[6] = {0, 0, 0, 0, 0, 0};
+      for (int a = 0; a < 6; ++a) {
+        for (int b = 0; b < 6; ++b) {
+          A[a * 6 + b] = Hsolve[a * 6 + b];
+        }
+        if (use_whiten_modes) {
+          A[a * 6 + a] += lambda;
+        } else {
+          A[a * 6 + a] += lambda * std::max(Hsolve[a * 6 + a], 1e-6);
+        }
+        rhs[a] = -gsolve[a];
+      }
+
+      if (!solve_linear6(A, rhs, delta_v)) {
+        lambda *= 4.0;
+        continue;
+      }
+
+      double dxi[6];
+      if (use_whiten_modes && Linv_u2xi != nullptr) {
+        for (int a = 0; a < 6; ++a) {
+          double s = 0.0;
+          for (int b = 0; b < 6; ++b) {
+            s += Linv_u2xi[a * 6 + b] * delta_v[b];
+          }
+          dxi[a] = s;
+        }
+      } else {
+        for (int a = 0; a < 6; ++a) {
+          dxi[a] = delta_v[a];
+        }
+      }
+      Pose6 delta = make_pose(dxi[0], dxi[1], dxi[2], dxi[3], dxi[4], dxi[5]);
+      double dnorm = std::sqrt(delta.tx * delta.tx + delta.ty * delta.ty + delta.tz * delta.tz +
+                               delta.rx * delta.rx + delta.ry * delta.ry + delta.rz * delta.rz);
+
+      bool accepted = false;
+      double alpha = 1.0;
+      double c_new = c_prev;
+
+      for (int ls = 0; ls < 8; ++ls) {
+        Pose6 cand = add_pose(cur, scale_pose(delta, alpha));
+        c_new = eval_pose(cand).cost;
+        if (c_new < c_prev) {
+          cur = cand;
+          accepted = true;
+          break;
+        }
+        alpha *= 0.5;
+      }
+
+      if (accepted) {
+        lambda *= 0.7;
+      } else {
+        lambda *= 2.0;
+      }
+
+      if (std::abs(c_prev - c_new) < tol_cost || dnorm < tol_step) {
+        c_prev = c_new;
+        break;
+      }
+      c_prev = c_new;
+    }
+
+    CostResult evalf = eval_pose(cur);
+    if (evalf.cost < best_c_final) {
+      best_pose = cur;
+      best_c_init = c_init;
+      best_c_final = evalf.cost;
+      best_iters = used_iters;
+      best_eval = evalf;
+      best_restart = (seed_idx > 0);
+    }
+  }
+
+  int flags = 0;
+  if (best_eval.overlap < 0.85) {
+    flags |= 1;
+  }
+  if (best_c_final > best_c_init * 0.999) {
+    flags |= 2;
+  }
+
+  return FrameFit{best_pose,
+                  best_c_init,
+                  best_c_final,
+                  best_eval.overlap,
+                  best_iters,
+                  best_restart,
+                  flags};
+}
+
 FrameFit optimize_frame_pose(const NumericVector& data,
                              const NumericVector& tmpl,
                              int nx,
@@ -414,35 +1661,31 @@ FrameFit optimize_frame_pose(const NumericVector& data,
                              double tol_step,
                              double tol_cost,
                              double huber_k,
-                             int n_restarts) {
+                             int n_restarts,
+                             bool use_overlap_taper,
+                             bool capture_boost,
+                             double capture_trans_mm,
+                             double capture_rot_deg,
+                             int capture_topk) {
   std::vector<Pose6> seeds;
-  seeds.push_back(init_pose);
-
-  double rmm = 2.0;
-  double rdeg = 2.0 * M_PI / 180.0;
-
-  if (n_restarts > 0) {
-    std::vector<Pose6> cand = {
-        make_pose(init_pose.tx + rmm, init_pose.ty, init_pose.tz, init_pose.rx, init_pose.ry, init_pose.rz),
-        make_pose(init_pose.tx - rmm, init_pose.ty, init_pose.tz, init_pose.rx, init_pose.ry, init_pose.rz),
-        make_pose(init_pose.tx, init_pose.ty + rmm, init_pose.tz, init_pose.rx, init_pose.ry, init_pose.rz),
-        make_pose(init_pose.tx, init_pose.ty - rmm, init_pose.tz, init_pose.rx, init_pose.ry, init_pose.rz),
-        make_pose(init_pose.tx, init_pose.ty, init_pose.tz + rmm, init_pose.rx, init_pose.ry, init_pose.rz),
-        make_pose(init_pose.tx, init_pose.ty, init_pose.tz - rmm, init_pose.rx, init_pose.ry, init_pose.rz),
-        make_pose(init_pose.tx, init_pose.ty, init_pose.tz, init_pose.rx + rdeg, init_pose.ry, init_pose.rz),
-        make_pose(init_pose.tx, init_pose.ty, init_pose.tz, init_pose.rx - rdeg, init_pose.ry, init_pose.rz),
-        make_pose(init_pose.tx, init_pose.ty, init_pose.tz, init_pose.rx, init_pose.ry + rdeg, init_pose.rz),
-        make_pose(init_pose.tx, init_pose.ty, init_pose.tz, init_pose.rx, init_pose.ry - rdeg, init_pose.rz),
-        make_pose(init_pose.tx, init_pose.ty, init_pose.tz, init_pose.rx, init_pose.ry, init_pose.rz + rdeg),
-        make_pose(init_pose.tx, init_pose.ty, init_pose.tz, init_pose.rx, init_pose.ry, init_pose.rz - rdeg)};
-
-    for (int i = 0; i < n_restarts && i < static_cast<int>(cand.size()); ++i) {
-      seeds.push_back(cand[i]);
-    }
+  int n_keep = std::max(n_restarts, capture_boost ? capture_topk : n_restarts);
+  if (n_keep > 0 || capture_boost) {
+    std::vector<Pose6> cand =
+        build_restart_candidates(init_pose, capture_boost, capture_trans_mm, capture_rot_deg);
+    seeds = select_best_restart_seeds(
+        init_pose,
+        cand,
+        n_keep,
+        [&](const Pose6& p) {
+          return evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, p, huber_k, use_overlap_taper).cost;
+        });
+  } else {
+    seeds.push_back(init_pose);
   }
 
   Pose6 best_pose = init_pose;
-  CostResult best_eval = evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, init_pose, huber_k);
+  CostResult best_eval =
+      evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, init_pose, huber_k, use_overlap_taper);
   double best_c_init = best_eval.cost;
   double best_c_final = best_eval.cost;
   int best_iters = 0;
@@ -459,7 +1702,8 @@ FrameFit optimize_frame_pose(const NumericVector& data,
   for (size_t seed_idx = 0; seed_idx < seeds.size(); ++seed_idx) {
     Pose6 cur = seeds[seed_idx];
     double lambda = lambda0;
-    CostResult eval0 = evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, cur, huber_k);
+    CostResult eval0 =
+        evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, cur, huber_k, use_overlap_taper);
     double c_init = eval0.cost;
     double c_prev = c_init;
     int used_iters = 0;
@@ -492,8 +1736,12 @@ FrameFit optimize_frame_pose(const NumericVector& data,
         Pose6 p_plus = set_param(cur, d, v + h[d]);
         Pose6 p_minus = set_param(cur, d, v - h[d]);
 
-        double cp = evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, p_plus, huber_k).cost;
-        double cm = evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, p_minus, huber_k).cost;
+        double cp =
+            evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, p_plus, huber_k, use_overlap_taper)
+                .cost;
+        double cm =
+            evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, p_minus, huber_k, use_overlap_taper)
+                .cost;
 
         grad[d] = (cp - cm) / (2.0 * h[d]);
         hdiag[d] = (cp - 2.0 * c_prev + cm) / (h[d] * h[d]);
@@ -519,7 +1767,8 @@ FrameFit optimize_frame_pose(const NumericVector& data,
 
       for (int ls = 0; ls < 8; ++ls) {
         Pose6 cand = add_pose(cur, scale_pose(delta, alpha));
-        c_new = evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, cand, huber_k).cost;
+        c_new = evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, cand, huber_k, use_overlap_taper)
+                    .cost;
         if (c_new < c_prev) {
           cur = cand;
           accepted = true;
@@ -541,7 +1790,8 @@ FrameFit optimize_frame_pose(const NumericVector& data,
       c_prev = c_new;
     }
 
-    CostResult evalf = evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, cur, huber_k);
+    CostResult evalf =
+        evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, cur, huber_k, use_overlap_taper);
 
     if (evalf.cost < best_c_final) {
       best_pose = cur;
@@ -593,7 +1843,11 @@ NumericVector build_aligned_trimmed_template(const NumericVector& data,
         for (int t = 0; t < nt; ++t) {
           bool in_bounds = false;
           fixed_to_moving_vox(i, j, k, nx, ny, nz, pixdim, poses[t], src, &in_bounds);
-          vals[t] = sample_trilinear_frame(data, nx, ny, nz, nxyz, t, src[0], src[1], src[2]);
+          if (in_bounds) {
+            vals[t] = sample_trilinear_frame(data, nx, ny, nz, nxyz, t, src[0], src[1], src[2]);
+          } else {
+            vals[t] = 0.0;
+          }
         }
 
         std::sort(vals.begin(), vals.end());
@@ -712,16 +1966,55 @@ List cpp_volreg_estimate(
   double lambda0 = get_dbl_ctrl(control, "lambda0", 1e-2);
   double tol_step = get_dbl_ctrl(control, "tol_step", 1e-5);
   double tol_cost = get_dbl_ctrl(control, "tol_cost", 1e-6);
+  bool use_overlap_taper = true;
+  if (control.containsElementNamed("use_overlap_taper")) {
+    use_overlap_taper = as<bool>(control["use_overlap_taper"]);
+  }
+  bool use_ic_stencil = false;
+  if (control.containsElementNamed("use_ic_stencil")) {
+    use_ic_stencil = as<bool>(control["use_ic_stencil"]);
+  }
+  bool whiten_modes = false;
+  if (control.containsElementNamed("whiten_modes")) {
+    whiten_modes = as<bool>(control["whiten_modes"]);
+  }
+  double whiten_reg = get_dbl_ctrl(control, "whiten_reg", 1e-6);
+  bool use_nuisance_marginalization = false;
+  if (control.containsElementNamed("use_nuisance_marginalization")) {
+    use_nuisance_marginalization = as<bool>(control["use_nuisance_marginalization"]);
+  }
+  bool nuisance_include_template = false;
+  if (control.containsElementNamed("nuisance_include_template")) {
+    nuisance_include_template = as<bool>(control["nuisance_include_template"]);
+  }
+  bool nuisance_orthogonalize = true;
+  if (control.containsElementNamed("nuisance_orthogonalize")) {
+    nuisance_orthogonalize = as<bool>(control["nuisance_orthogonalize"]);
+  }
+  double nuisance_ridge = get_dbl_ctrl(control, "nuisance_ridge", 1e-4);
+  double nuisance_orth_reg = get_dbl_ctrl(control, "nuisance_orth_reg", 1e-6);
+  bool capture_boost = true;
+  if (control.containsElementNamed("capture_boost")) {
+    capture_boost = as<bool>(control["capture_boost"]);
+  }
+  double capture_trans_mm = get_dbl_ctrl(control, "capture_trans_mm", 8.0);
+  double capture_rot_deg = get_dbl_ctrl(control, "capture_rot_deg", 8.0);
+  int capture_topk = get_int_ctrl(control, "capture_topk", 6);
+  int stencil_n = get_int_ctrl(control, "stencil_n", n_samples);
+  int stencil_bx = get_int_ctrl(control, "stencil_bx", 4);
+  int stencil_by = get_int_ctrl(control, "stencil_by", 4);
+  int stencil_bz = get_int_ctrl(control, "stencil_bz", 2);
+  double stencil_gamma = get_dbl_ctrl(control, "stencil_gamma", 0.5);
 
   NumericMatrix par(nt, 6);
   NumericMatrix mats = identity_mats(nt);
 
   NumericVector template_vol = extract_ref_volume(data, nx, ny, nz, ref_index);
-  if (robust_template && nt > 1) {
-    template_vol = trimmed_mean_template(data, nx, ny, nz, nt, trim_frac);
-  }
 
   LogicalVector fit_mask = build_mask(mask, nxyz);
+  if (mask.isNull()) {
+    fit_mask = auto_mask_from_template(template_vol, nxyz);
+  }
   std::vector<int> samples = make_sample_points(fit_mask, nxyz, n_samples);
   if (samples.empty()) {
     stop("mask produced zero fitting samples");
@@ -764,23 +2057,109 @@ List cpp_volreg_estimate(
                              0.0,
                              0.0);
   auto solve_sequence = [&](const Pose6& ref_seed, bool blend_current_pose_seed) {
-    store_fit(ref_t,
-              optimize_frame_pose(data,
-                                  template_vol,
-                                  nx,
-                                  ny,
-                                  nz,
-                                  nxyz,
-                                  ref_t,
-                                  pixdim,
-                                  samples,
-                                  ref_seed,
-                                  max_iter,
-                                  lambda0,
-                                  tol_step,
-                                  tol_cost,
-                                  huber_k,
-                                  n_restarts));
+    std::vector<StencilPoint> stencil;
+    bool use_ic_local = use_ic_stencil;
+    bool use_whiten_local = false;
+    int nuisance_dim_local = 0;
+    WhitenMetric wm;
+    wm.ok = false;
+    set_identity6(wm.L);
+    set_identity6(wm.Linv);
+    set_identity6(wm.LinvT);
+    if (use_ic_local) {
+      stencil = build_ic_stencil(template_vol,
+                                 data,
+                                 nx,
+                                 ny,
+                                 nz,
+                                 nt,
+                                 nxyz,
+                                 pixdim,
+                                 fit_mask,
+                                 stencil_n,
+                                 stencil_bx,
+                                 stencil_by,
+                                 stencil_bz,
+                                 stencil_gamma);
+      if (stencil.empty()) {
+        use_ic_local = false;
+      } else {
+        if (whiten_modes) {
+          wm = build_whiten_metric(stencil, whiten_reg);
+          if (wm.ok) {
+            apply_whiten_metric_to_stencil(&stencil, wm);
+            use_whiten_local = true;
+          } else {
+            copy_raw_jacobian_to_whitened(&stencil);
+          }
+        } else {
+          copy_raw_jacobian_to_whitened(&stencil);
+        }
+        if (use_nuisance_marginalization) {
+          nuisance_dim_local = prepare_nuisance_basis(&stencil,
+                                                      nx,
+                                                      ny,
+                                                      nz,
+                                                      nuisance_include_template,
+                                                      nuisance_orthogonalize,
+                                                      use_whiten_local,
+                                                      nuisance_orth_reg);
+        }
+      }
+    }
+
+    auto fit_one = [&](int frame_t, const Pose6& init_pose) {
+      if (use_ic_local) {
+        return optimize_frame_pose_ic(data,
+                                      nx,
+                                      ny,
+                                      nz,
+                                      nxyz,
+                                      frame_t,
+                                      pixdim,
+                                      stencil,
+                                      init_pose,
+                                      max_iter,
+                                      lambda0,
+                                      tol_step,
+                                      tol_cost,
+                                      huber_k,
+                                      n_restarts,
+                                      use_overlap_taper,
+                                      capture_boost,
+                                      capture_trans_mm,
+                                      capture_rot_deg,
+                                      capture_topk,
+                                      use_whiten_local,
+                                      use_whiten_local ? wm.LinvT : nullptr,
+                                      use_nuisance_marginalization,
+                                      nuisance_dim_local,
+                                      nuisance_ridge);
+      }
+      return optimize_frame_pose(data,
+                                 template_vol,
+                                 nx,
+                                 ny,
+                                 nz,
+                                 nxyz,
+                                 frame_t,
+                                 pixdim,
+                                 samples,
+                                 init_pose,
+                                 max_iter,
+                                 lambda0,
+                                 tol_step,
+                                 tol_cost,
+                                 huber_k,
+                                 n_restarts,
+                                 use_overlap_taper,
+                                 capture_boost,
+                                 capture_trans_mm,
+                                 capture_rot_deg,
+                                 capture_topk);
+    };
+
+    store_fit(ref_t, fit_one(ref_t, ref_seed));
 
     // Backward from reference
     for (int t = ref_t - 1; t >= 0; --t) {
@@ -788,27 +2167,19 @@ List cpp_volreg_estimate(
       if (t + 2 <= ref_t) {
         init = add_pose(poses[t + 1], sub_pose(poses[t + 1], poses[t + 2]));
       }
+      Vec3 com_t = center_of_mass_frame(data, nx, ny, nz, nxyz, t, pixdim, fit_mask);
+      Pose6 com_seed = make_pose(com_ref.x - com_t.x,
+                                 com_ref.y - com_t.y,
+                                 com_ref.z - com_t.z,
+                                 0.0,
+                                 0.0,
+                                 0.0);
+      init = scale_pose(add_pose(init, com_seed), 0.5);
       if (blend_current_pose_seed) {
         init = scale_pose(add_pose(init, poses[t]), 0.5);
       }
 
-      store_fit(t,
-                optimize_frame_pose(data,
-                                    template_vol,
-                                    nx,
-                                    ny,
-                                    nz,
-                                    nxyz,
-                                    t,
-                                    pixdim,
-                                    samples,
-                                    init,
-                                    max_iter,
-                                    lambda0,
-                                    tol_step,
-                                    tol_cost,
-                                    huber_k,
-                                    n_restarts));
+      store_fit(t, fit_one(t, init));
     }
 
     // Forward from reference
@@ -817,27 +2188,19 @@ List cpp_volreg_estimate(
       if (t - 2 >= ref_t) {
         init = add_pose(poses[t - 1], sub_pose(poses[t - 1], poses[t - 2]));
       }
+      Vec3 com_t = center_of_mass_frame(data, nx, ny, nz, nxyz, t, pixdim, fit_mask);
+      Pose6 com_seed = make_pose(com_ref.x - com_t.x,
+                                 com_ref.y - com_t.y,
+                                 com_ref.z - com_t.z,
+                                 0.0,
+                                 0.0,
+                                 0.0);
+      init = scale_pose(add_pose(init, com_seed), 0.5);
       if (blend_current_pose_seed) {
         init = scale_pose(add_pose(init, poses[t]), 0.5);
       }
 
-      store_fit(t,
-                optimize_frame_pose(data,
-                                    template_vol,
-                                    nx,
-                                    ny,
-                                    nz,
-                                    nxyz,
-                                    t,
-                                    pixdim,
-                                    samples,
-                                    init,
-                                    max_iter,
-                                    lambda0,
-                                    tol_step,
-                                    tol_cost,
-                                    huber_k,
-                                    n_restarts));
+      store_fit(t, fit_one(t, init));
     }
   };
 

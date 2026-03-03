@@ -9,4 +9,7 @@ src/*.so
 # Local library/test output
 tests/testthat/_snaps/
 
+# OMC state
+.omc/
+
 # beads runtime files are already ignored by .beads/.gitignore

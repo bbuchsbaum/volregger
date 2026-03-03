@@ -1,0 +1,426 @@
+---
+title: Getting Started with volregger
+output: rmarkdown::html_vignette
+vignette: '%\VignetteIndexEntry{Getting Started with volregger} %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}'
+params:
+  family: violet
+  preset: homage
+css: albers.css
+resource_files:
+- albers.css
+- albers.js
+includes:
+  in_header: |-
+    <script src="albers.js"></script>
+    <script>document.addEventListener('DOMContentLoaded',function(){document.body.classList.add('palette-violet');});</script>
+
+---
+
+```{r setup, include = FALSE}
+if (requireNamespace("ggplot2", quietly = TRUE) && requireNamespace("albersdown", quietly = TRUE)) ggplot2::theme_set(albersdown::theme_albers(params$family))
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  message = FALSE,
+  warning = FALSE,
+  fig.width = 6,
+  fig.height = 4
+)
+```
+
+```{r load-volregger}
+library(volregger)
+```
+
+Head motion is the single largest source of artifact in fMRI. Even
+sub-millimeter shifts between volumes can introduce spurious correlations
+and wash out real signal. **volregger** performs rigid-body volume
+registration entirely in R, estimating six motion parameters per frame
+(three translations, three rotations) and resampling the corrected data to
+a common reference.
+
+## Quick start
+
+The fastest path to a corrected run is a single call to `volreg()`:
+
+```{r quick-start}
+set.seed(42)
+phantom <- array(rnorm(8 * 8 * 4 * 5), dim = c(8, 8, 4, 5))
+
+fit <- volreg(phantom)
+fit
+```
+
+That's the whole pipeline — estimate motion, resample, compute quality
+metrics — in one call. The rest of this vignette walks through each piece
+in detail.
+
+## Creating a test dataset
+
+To see volregger in action you need data with *known* motion so you can
+verify the correction. We'll build a small spherical phantom and inject
+translations into specific frames.
+
+```{r create-phantom}
+set.seed(1)
+nx <- 16; ny <- 16; nz <- 8; nt <- 10
+
+grid <- expand.grid(
+  x = seq_len(nx), y = seq_len(ny), z = seq_len(nz)
+)
+d <- sqrt((grid$x - 8.5)^2 + (grid$y - 8.5)^2 + (grid$z - 4.5)^2)
+template <- array(0, dim = c(nx, ny, nz))
+template[d <= 5] <- 100
+d2 <- sqrt((grid$x - 5.5)^2 + (grid$y - 11)^2 + (grid$z - 3.5)^2)
+template[d2 <= 2] <- 140
+for (i in seq_len(nx)) {
+  template[i, , ] <- template[i, , ] + 1.2 * i
+}
+```
+
+```{r build-timeseries}
+run <- array(0, dim = c(nx, ny, nz, nt))
+for (t in seq_len(nt)) {
+  run[, , , t] <- template + rnorm(nx * ny * nz, sd = 3)
+}
+```
+
+Now inject x-direction shifts into three frames so the registration has
+something to find:
+
+```{r inject-motion}
+truth_motion <- matrix(0, nrow = nt, ncol = 6)
+
+# Frame 4: +1 voxel shift in x
+run[2:nx, , , 4]  <- run[1:(nx - 1), , , 4]
+run[1, , , 4]     <- 0
+truth_motion[4, 1] <- -1
+
+# Frame 7: +2 voxel shift in x
+run[3:nx, , , 7]  <- run[1:(nx - 2), , , 7]
+run[1:2, , , 7]   <- 0
+truth_motion[7, 1] <- -2
+
+# Frame 9: +1 voxel shift in x
+run[2:nx, , , 9]  <- run[1:(nx - 1), , , 9]
+run[1, , , 9]     <- 0
+truth_motion[9, 1] <- -1
+```
+
+```{r show-phantom, echo = FALSE, fig.cap = "Middle axial slice. Left: unperturbed template. Right: frame 7 after a 2-voxel shift.", fig.width = 7, fig.height = 3.5}
+mid_z <- nz %/% 2
+oldpar <- par(mfrow = c(1, 2), mar = c(2, 2, 2, 1))
+image(template[, , mid_z], main = "Template",
+      col = gray.colors(64), axes = FALSE)
+image(run[, , mid_z, 7], main = "Frame 7 (shifted +2 vox)",
+      col = gray.colors(64), axes = FALSE)
+par(oldpar)
+```
+
+## Running motion correction
+
+Pass the 4D array to `volreg()`. By default it uses the robust rigid-body
+engine, picks the middle frame as reference, resamples with B-spline
+interpolation, and computes QC metrics:
+
+```{r run-volreg}
+fit <- volreg(run)
+```
+
+The result is a `volregger_fit` object containing the corrected data,
+motion parameters, the alignment template, a brain mask, and QC metrics.
+
+```{r print-fit}
+fit
+```
+
+## Inspecting the results
+
+`summary()` gives a quick snapshot of motion severity:
+
+```{r summary-fit}
+summary(fit)
+```
+
+The estimated motion traces live in `coef()` — an `r nrow(coef(fit))` x 6
+matrix of (tx, ty, tz, rx, ry, rz):
+
+```{r coef-fit}
+head(coef(fit))
+```
+
+For a tidy data frame that includes QC columns alongside the parameters,
+use `as.data.frame()`:
+
+```{r as-dataframe}
+head(as.data.frame(fit))
+```
+
+## Visualizing motion
+
+The built-in `plot()` method shows motion traces and framewise displacement
+in a single figure:
+
+```{r plot-fit, fig.height = 5, fig.cap = "Top: six rigid-body parameters over time. Bottom: framewise displacement. Spikes at frames 4, 7, and 9 correspond to the injected shifts."}
+plot(fit)
+```
+
+Notice the spikes in both panels at the frames where we injected motion.
+The largest tx displacement should occur near frame 7, where we introduced
+the largest shift.
+
+## Quality control metrics
+
+Two standard QC measures are available as standalone functions. These are
+useful when you already have motion estimates or want to compare pipelines.
+
+**Framewise displacement** (FD) summarizes volume-to-volume head movement
+in a single number per frame:
+
+```{r compute-fd}
+fd <- framewise_disp(coef(fit))
+fd
+```
+
+**DVARS** measures how much image intensity changes between consecutive
+volumes — it captures both motion and signal artifacts:
+
+```{r compute-dvars}
+dv <- dvars(run)
+dv
+```
+
+```{r qc-panel, echo = FALSE, fig.cap = "FD and DVARS traces. Both spike at the frames with injected motion.", fig.width = 7, fig.height = 4.5}
+oldpar <- par(mfrow = c(2, 1), mar = c(4, 4, 2, 1))
+plot(fd, type = "h", lwd = 2, col = "steelblue",
+     xlab = "Frame", ylab = "FD (mm)", main = "Framewise Displacement")
+abline(h = 0.5, lty = 2, col = "red")
+plot(dv, type = "h", lwd = 2, col = "darkorange",
+     xlab = "Frame", ylab = "DVARS", main = "DVARS")
+par(oldpar)
+```
+
+The dashed red line at FD = 0.5 mm is a common exclusion threshold. Frames
+above it are candidates for scrubbing or censoring in downstream analyses.
+
+## Comparing before and after
+
+The corrected volumes live in `fit$corrected`. Here we compare the shifted
+frame 7 before and after correction. For this synthetic dataset we also
+compute a truth-aligned correction using the known injected shifts, so the
+visual target is explicit:
+
+```{r compare-slices, echo = FALSE, fig.cap = "Frame 7 before (left), estimated correction from volreg() (middle), and correction from known synthetic motion (right).", fig.width = 10, fig.height = 3.5}
+truth_corrected <- apply_motion(run, truth_motion, interp = "linear")
+# For visual comparison in the vignette, use a sharper interpolation mode.
+estimated_visual <- apply_motion(run, fit$motion, interp = "lanczos")
+oldpar <- par(mfrow = c(1, 3), mar = c(2, 2, 2, 1))
+image(run[, , mid_z, 7], main = "Before correction",
+      col = gray.colors(64), axes = FALSE)
+image(estimated_visual[, , mid_z, 7], main = "After (estimated)",
+      col = gray.colors(64), axes = FALSE)
+image(truth_corrected[, , mid_z, 7], main = "After (known truth)",
+      col = gray.colors(64), axes = FALSE)
+par(oldpar)
+```
+
+The right panel is the expected target for this synthetic setup.
+
+## Success example 1: minimal known-shift recovery
+
+The following tiny fixture mirrors the package unit tests: one frame is
+shifted by exactly one voxel in x, and the estimator should recover that
+structure as a compensating motion pattern around the middle reference.
+
+```{r success-minimal-estimation}
+x0 <- array(0, dim = c(9, 9, 5))
+x0[5, 5, 3] <- 5
+x0[4, 5, 3] <- 2
+x0[6, 5, 3] <- 1
+
+x_small <- array(0, dim = c(9, 9, 5, 3))
+x_small[, , , 1] <- x0
+x_small[, , , 2] <- x0
+x_small[, , , 3] <- x0
+x_small[2:9, , , 2] <- x0[1:8, , ]
+
+est_small <- estimate_motion(
+  x_small,
+  control = modifyList(volreg_control(), list(max_iter = 8L, n_samples = 2000L))
+)
+
+round(data.frame(frame = 1:3, est_tx = est_small$par[, 1]), 3)
+```
+
+A direct image-space check shows that the shifted frame is pulled much
+closer to the template after applying the estimated motion:
+
+```{r success-minimal-mse}
+x_small_corr <- apply_motion(x_small, est_small$par, interp = "linear")
+
+data.frame(
+  frame = 1:3,
+  mse_before = sapply(1:3, function(fr) mean((x_small[, , , fr] - x0)^2)),
+  mse_after = sapply(1:3, function(fr) mean((x_small_corr[, , , fr] - x0)^2))
+)
+```
+
+## Success example 2: tuned controls on harder synthetic motion
+
+For a tougher mixed translation/rotation trajectory, tuned robust controls
+and IC stencil mode can dramatically improve pose recovery relative to a
+deliberately weak baseline:
+
+```{r success-tuned-controls}
+set.seed(2)
+nx_h <- 12; ny_h <- 12; nz_h <- 6; nt_h <- 8
+
+grid_h <- expand.grid(x = seq_len(nx_h), y = seq_len(ny_h), z = seq_len(nz_h))
+d_h <- sqrt((grid_h$x - 6.5)^2 + (grid_h$y - 6.5)^2 + (grid_h$z - 3.5)^2)
+template_h <- array(0, dim = c(nx_h, ny_h, nz_h))
+template_h[d_h <= 3.6] <- 100
+template_h[4:5, 8:9, 3] <- 130
+
+base_h <- array(rep(as.numeric(template_h), nt_h), dim = c(nx_h, ny_h, nz_h, nt_h))
+base_h <- base_h + array(rnorm(length(base_h), sd = 1.2), dim = dim(base_h))
+
+tt_h <- seq(0, 1, length.out = nt_h)
+truth_h <- cbind(
+  1.0 * sin(2 * pi * tt_h),
+  0.5 * cos(2 * pi * tt_h),
+  0.2 * sin(4 * pi * tt_h),
+  (1.8 * pi / 180) * sin(2 * pi * tt_h),
+  (1.2 * pi / 180) * cos(2 * pi * tt_h),
+  (1.5 * pi / 180) * sin(3 * pi * tt_h)
+)
+truth_h <- sweep(truth_h, 2, truth_h[1, ], FUN = "-")
+
+run_h <- apply_motion(base_h, truth_h, interp = "linear")
+
+ctl_fast <- modifyList(
+  volreg_control(),
+  list(
+    max_iter = 6L,
+    n_samples = 1200L,
+    n_restarts = 1L,
+    use_ic_stencil = FALSE,
+    capture_boost = FALSE,
+    robust_template = FALSE,
+    template_refresh = FALSE
+  )
+)
+
+ctl_tuned <- modifyList(
+  volreg_control(),
+  list(
+    max_iter = 8L,
+    n_samples = 1500L,
+    n_restarts = 2L,
+    use_ic_stencil = TRUE,
+    stencil_n = 1200L,
+    whiten_modes = TRUE,
+    capture_boost = TRUE,
+    capture_trans_mm = 10,
+    capture_rot_deg = 10,
+    capture_topk = 8L,
+    robust_template = TRUE,
+    template_refresh = TRUE
+  )
+)
+
+est_fast <- estimate_motion(run_h, ref = "index", ref_index = 1, control = ctl_fast)
+est_tuned <- estimate_motion(run_h, ref = "index", ref_index = 1, control = ctl_tuned)
+
+pose_rmse <- function(par, truth) sqrt(mean((par + truth)^2))
+
+data.frame(
+  model = c("fast baseline", "tuned robust"),
+  pose_rmse = c(
+    pose_rmse(est_fast$par, truth_h),
+    pose_rmse(est_tuned$par, truth_h)
+  ),
+  fail_rate = c(
+    mean(est_fast$flags != 0),
+    mean(est_tuned$flags != 0)
+  )
+)
+```
+
+## Step-by-step workflow
+
+If you need more control — for instance, to inspect motion estimates before
+deciding how to resample — you can split the pipeline into separate steps.
+
+Estimate motion parameters without resampling:
+
+```{r estimate-only}
+est <- estimate_motion(run)
+str(est[c("par", "cost_init", "cost_final")])
+```
+
+Then apply the estimated parameters with your choice of interpolation:
+
+```{r apply-separately}
+corrected <- apply_motion(run, est$par, interp = "lanczos")
+dim(corrected)
+```
+
+This two-step pattern is useful when you want to compare interpolation
+methods or apply the same motion estimates to multiple runs.
+
+## Tuning the correction
+
+`volreg_control()` returns the default settings. Override any element to
+customize the optimization:
+
+```{r show-control}
+str(volreg_control())
+```
+
+Key parameters:
+
+- **`downsample`** — Coarse-to-fine pyramid levels (default `c(4, 2, 1)`)
+- **`max_iter`** — Maximum iterations at each level
+- **`huber_k`** — Huber loss threshold for outlier robustness
+- **`nthreads`** — Number of threads for resampling
+
+For runs with severe motion, increasing `max_iter` or adding restarts can
+improve convergence:
+
+```{r custom-control, eval = FALSE}
+fit_strict <- volreg(
+  run,
+  control = modifyList(
+    volreg_control(),
+    list(max_iter = c(60L, 40L, 30L), n_restarts = 2L)
+  )
+)
+```
+
+## Choosing an engine
+
+volregger offers two registration engines:
+
+- **`rigid_robust`** (default) — Standard rigid-body alignment with
+  Huber-weighted cost. Fast and appropriate for most data.
+- **`rigid_spline`** — Fits a temporal spline through the pose parameters,
+  enabling slice-level timing correction. Use this when you have
+  interleaved or multiband acquisitions and want sub-TR motion estimates.
+
+```{r spline-engine, eval = FALSE}
+fit_spline <- volreg(
+  run,
+  engine = "rigid_spline",
+  slice_times = seq(0, 1, length.out = nz)
+)
+```
+
+## Next steps
+
+- `repair_spin_history()` corrects intensity artifacts caused by
+  through-plane motion during interleaved acquisitions
+- Pass `slice_times` and `mb_groups` to `volreg()` for acquisition-aware
+  correction in multiband sequences
+- See `?volreg`, `?estimate_motion`, and `?volreg_control` for full
+  parameter documentation
