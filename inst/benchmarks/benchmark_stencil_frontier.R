@@ -52,6 +52,7 @@ pose_stats <- function(est_par, truth_pose, iters) {
 benchmark_frontier <- function() {
   base <- make_phantom()
   sim <- build_run(base, nt = 20, noise_sd = 2, seed = 42)
+  eval_mask <- base > stats::quantile(base, probs = 0.35)
 
   methods <- list(
     list(name = "dense-9000", use_ic = FALSE, n_points = 9000L),
@@ -67,32 +68,43 @@ benchmark_frontier <- function() {
   for (i in seq_along(methods)) {
     m <- methods[[i]]
 
-    ctl <- utils::modifyList(
-      volreg_control(),
-      list(
+    profile <- volreg_profile(
+      if (isTRUE(m$use_ic)) "ic_stencil" else "dense_baseline",
+      overrides = list(
         max_iter = 8L,
         n_restarts = 2L,
         n_samples = as.integer(m$n_points),
         robust_template = FALSE,
         template_refresh = FALSE,
-        use_ic_stencil = isTRUE(m$use_ic),
         stencil_n = as.integer(m$n_points)
       )
     )
+    ctl <- profile$control
 
     tm <- system.time({
       est <- estimate_motion(sim$run, ref = "index", ref_index = 1, control = ctl)
     })
 
     st <- pose_stats(est$par, sim$truth_pose, est$iters)
+    truth_disp <- motion_displacement_summary(
+      mask = eval_mask,
+      motion = est$par,
+      truth = invert_motion(sim$truth_pose)
+    )
 
     rows[[i]] <- data.frame(
       method = m$name,
+      profile = profile$name,
+      components = paste(profile$components, collapse = "+"),
       use_ic_stencil = isTRUE(m$use_ic),
       n_points = as.integer(m$n_points),
       elapsed_sec = unname(tm[["elapsed"]]),
       trans_rmse = st[["trans_rmse"]],
       rot_rmse = st[["rot_rmse"]],
+      mask_disp_median = stats::median(truth_disp$disp_median),
+      mask_disp_p95 = stats::median(truth_disp$disp_p95),
+      mask_disp_max = stats::median(truth_disp$disp_max),
+      fd_error_median = stats::median(truth_disp$fd_error),
       fail_rate = st[["fail_rate"]],
       mean_iters = st[["mean_iters"]],
       stringsAsFactors = FALSE

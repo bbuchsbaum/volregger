@@ -160,6 +160,28 @@ render_continuous_volume <- function(subject,
   out
 }
 
+continuous_brain_mask <- function(subject,
+                                  nx,
+                                  ny,
+                                  nz,
+                                  pixdim = c(2, 2, 2),
+                                  threshold = 15,
+                                  supersample = 1L) {
+  ref <- render_continuous_volume(
+    subject = subject,
+    nx = nx,
+    ny = ny,
+    nz = nz,
+    pixdim = pixdim,
+    pose = rep(0, 6),
+    supersample = supersample,
+    bias_amp = 0,
+    gain = 1,
+    noise_sd = 0
+  )
+  ref > threshold
+}
+
 simulate_continuous_run <- function(subject,
                                     nx = 16,
                                     ny = 16,

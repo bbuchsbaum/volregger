@@ -64,30 +64,44 @@ run_one <- function(seed, scenario, method) {
     seed = 8200 + 100L * seed + as.integer(1000 * scenario$bias_amp)
   )
 
-  ctl <- utils::modifyList(
-    volreg_control(),
-    list(
+  profile_name <- if (!isTRUE(method$use_nuisance)) {
+    "ic_whiten"
+  } else if (isTRUE(method$include_template)) {
+    "ic_nuisance_full"
+  } else {
+    "ic_nuisance"
+  }
+  profile <- volreg_profile(
+    profile_name,
+    overrides = list(
       max_iter = 8L,
       n_samples = 2200L,
       n_restarts = 2L,
-      use_ic_stencil = TRUE,
       stencil_n = 1800L,
-      whiten_modes = TRUE,
-      capture_boost = TRUE,
       capture_trans_mm = 10,
       capture_rot_deg = 10,
-      capture_topk = 8L,
-      use_nuisance_marginalization = isTRUE(method$use_nuisance),
-      nuisance_include_template = isTRUE(method$include_template),
-      nuisance_orthogonalize = TRUE,
-      nuisance_ridge = 1e-4
+      capture_topk = 8L
     )
   )
+  ctl <- profile$control
 
   elapsed <- system.time({
     est <- estimate_motion(sim$run, ref = "index", ref_index = 1, control = ctl)
   })[["elapsed"]]
   met <- pose_metrics(est, poses)
+  eval_mask <- continuous_brain_mask(
+    subject = subject,
+    nx = 16,
+    ny = 16,
+    nz = 8,
+    pixdim = sim$pixdim
+  )
+  truth_disp <- motion_displacement_summary(
+    mask = eval_mask,
+    motion = est$par,
+    truth = invert_motion(poses),
+    pixdim = sim$pixdim
+  )
 
   data.frame(
     scenario = scenario$name,
@@ -95,10 +109,16 @@ run_one <- function(seed, scenario, method) {
     method = method$name,
     nuisance = method$use_nuisance,
     include_template = method$include_template,
+    profile = profile$name,
+    components = paste(profile$components, collapse = "+"),
     elapsed_sec = unname(elapsed),
     trans_rmse = met[["trans_rmse"]],
     rot_rmse = met[["rot_rmse"]],
     disp50_median = met[["disp50_median"]],
+    mask_disp_median = stats::median(truth_disp$disp_median),
+    mask_disp_p95 = stats::median(truth_disp$disp_p95),
+    mask_disp_max = stats::median(truth_disp$disp_max),
+    fd_error_median = stats::median(truth_disp$fd_error),
     fail_rate = met[["fail_rate"]],
     mean_iters = met[["mean_iters"]],
     stringsAsFactors = FALSE
@@ -148,6 +168,9 @@ benchmark_frontier <- function(seeds = 1:8) {
         trans_ratio = alt$trans_rmse / base$trans_rmse,
         rot_ratio = alt$rot_rmse / base$rot_rmse,
         disp50_ratio = alt$disp50_median / base$disp50_median,
+        mask_disp_ratio = alt$mask_disp_median / base$mask_disp_median,
+        mask_disp_p95_ratio = alt$mask_disp_p95 / base$mask_disp_p95,
+        fd_error_ratio = alt$fd_error_median / base$fd_error_median,
         fail_delta = alt$fail_rate - base$fail_rate,
         iter_ratio = alt$mean_iters / base$mean_iters,
         stringsAsFactors = FALSE
@@ -172,12 +195,19 @@ benchmark_frontier <- function(seeds = 1:8) {
           trans_rmse_median = median(r$trans_rmse),
           rot_rmse_median = median(r$rot_rmse),
           disp50_median = median(r$disp50_median),
+          mask_disp_median = median(r$mask_disp_median),
+          mask_disp_p95 = median(r$mask_disp_p95),
+          mask_disp_max = median(r$mask_disp_max),
+          fd_error_median = median(r$fd_error_median),
           fail_rate_median = median(r$fail_rate),
           mean_iters_median = median(r$mean_iters),
           elapsed_ratio_median = 1.0,
           trans_ratio_median = 1.0,
           rot_ratio_median = 1.0,
           disp50_ratio_median = 1.0,
+          mask_disp_ratio_median = 1.0,
+          mask_disp_p95_ratio_median = 1.0,
+          fd_error_ratio_median = 1.0,
           fail_delta_median = 0.0,
           iter_ratio_median = 1.0,
           stringsAsFactors = FALSE
@@ -192,12 +222,19 @@ benchmark_frontier <- function(seeds = 1:8) {
           trans_rmse_median = median(r$trans_rmse),
           rot_rmse_median = median(r$rot_rmse),
           disp50_median = median(r$disp50_median),
+          mask_disp_median = median(r$mask_disp_median),
+          mask_disp_p95 = median(r$mask_disp_p95),
+          mask_disp_max = median(r$mask_disp_max),
+          fd_error_median = median(r$fd_error_median),
           fail_rate_median = median(r$fail_rate),
           mean_iters_median = median(r$mean_iters),
           elapsed_ratio_median = median(p$elapsed_ratio),
           trans_ratio_median = median(p$trans_ratio),
           rot_ratio_median = median(p$rot_ratio),
           disp50_ratio_median = median(p$disp50_ratio),
+          mask_disp_ratio_median = median(p$mask_disp_ratio),
+          mask_disp_p95_ratio_median = median(p$mask_disp_p95_ratio),
+          fd_error_ratio_median = median(p$fd_error_ratio),
           fail_delta_median = median(p$fail_delta),
           iter_ratio_median = median(p$iter_ratio),
           stringsAsFactors = FALSE
