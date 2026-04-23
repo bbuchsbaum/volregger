@@ -17,12 +17,14 @@ defaults <- list(
   volreg_profile = "ic_nuisance",
   volreg_ref = "robust_mean",
   nifreeze_model = "mean",
+  afni_image = "afni/afni_make_build",
+  afni_platform = "linux/amd64",
   seed = "4401"
 )
 opts <- parse_benchmark_args(
   commandArgs(trailingOnly = TRUE),
   defaults = defaults,
-  flags = c("skip_nifreeze")
+  flags = c("skip_nifreeze", "skip_afni")
 )
 
 input_path <- opts$input %||% default_realdata_input()
@@ -41,6 +43,7 @@ native_input_path <- file.path(native_dir, "input.nii.gz")
 native_mask_path <- file.path(native_dir, "mask.nii.gz")
 write_bold_nifti(native_loaded$data, native_input_path, native_loaded$template)
 write_mask_nifti(native_mask, native_mask_path, native_loaded$template)
+native_base_index <- select_reference_frame(native_loaded$data, native_mask) - 1L
 
 scenario_names <- strsplit(opts$scenarios, ",", fixed = TRUE)[[1]]
 scenario_names <- trimws(scenario_names)
@@ -126,8 +129,34 @@ probe_nifreeze <- function() {
 
 nifreeze_probe <- probe_nifreeze()
 
+probe_afni <- function() {
+  if (isTRUE(opts$skip_afni)) {
+    return(list(available = FALSE, message = "Skipped by user request"))
+  }
+  probe <- run_profiled_command(
+    command = file.path(R.home("bin"), "Rscript"),
+    args = c(
+      "inst/benchmarks/run_afni_3dvolreg_realdata.R",
+      "--probe",
+      "--image", opts$afni_image,
+      "--platform", opts$afni_platform
+    ),
+    stdout_path = file.path(out_dir, "afni_probe_stdout.txt"),
+    stderr_path = file.path(out_dir, "afni_probe_stderr.txt")
+  )
+  stdout_lines <- if (file.exists(file.path(out_dir, "afni_probe_stdout.txt"))) {
+    readLines(file.path(out_dir, "afni_probe_stdout.txt"), warn = FALSE)
+  } else {
+    character()
+  }
+  msg <- if (length(stdout_lines)) paste(stdout_lines, collapse = "\n") else method_error_message(file.path(out_dir, "afni_probe_stderr.txt"))
+  list(available = identical(probe$status, 0L), message = msg %||% NA_character_)
+}
+
+afni_probe <- probe_afni()
+
 scenario_catalog <- c("native", scenario_names)
-methods <- c("volregger", "nifreeze")
+methods <- c("volregger", "nifreeze", "afni_3dvolreg")
 rows <- vector("list", length(scenario_catalog) * length(methods))
 idx <- 1L
 
@@ -143,6 +172,7 @@ run_one <- function(method, scenario_name) {
     mask_path <- native_mask_path
     truth <- NULL
     clean <- NULL
+    base_index <- native_base_index
     dataset_mode <- "native"
   } else {
     sc <- scenario_objects[[scenario_name]]
@@ -152,6 +182,7 @@ run_one <- function(method, scenario_name) {
     mask_path <- sc$mask_path
     truth <- sc$truth_mats
     clean <- sc$clean
+    base_index <- sc$reference_index - 1L
     dataset_mode <- "truth_injected"
   }
 
@@ -178,7 +209,7 @@ run_one <- function(method, scenario_name) {
       method_model = paste(opts$volreg_profile, opts$volreg_ref, sep = ":"),
       stringsAsFactors = FALSE
     )
-  } else {
+  } else if (identical(method, "nifreeze")) {
     if (!isTRUE(nifreeze_probe$available)) {
       return(data.frame(
         method = method,
@@ -255,6 +286,63 @@ run_one <- function(method, scenario_name) {
       method_model = paste(opts$nifreeze_backend, opts$nifreeze_model, sep = ":"),
       stringsAsFactors = FALSE
     )
+  } else if (identical(method, "afni_3dvolreg")) {
+    if (!isTRUE(afni_probe$available)) {
+      return(data.frame(
+        method = method,
+        dataset_mode = dataset_mode,
+        scenario = scenario_name,
+        method_model = paste(opts$afni_image, base_index, sep = ":base="),
+        elapsed_sec = NA_real_,
+        peak_rss_mb = NA_real_,
+        temp_bytes_written = NA_real_,
+        status = "unavailable",
+        error = afni_probe$message,
+        fit_fail_rate = NA_real_,
+        fd_mean = NA_real_,
+        fd_p95 = NA_real_,
+        dvars_before_mean = NA_real_,
+        dvars_before_p95 = NA_real_,
+        dvars_after_mean = NA_real_,
+        dvars_after_p95 = NA_real_,
+        dvars_ratio = NA_real_,
+        tsnr_before = NA_real_,
+        tsnr_after = NA_real_,
+        tsnr_ratio = NA_real_,
+        blur_proxy_before = NA_real_,
+        blur_proxy_after = NA_real_,
+        blur_proxy_ratio = NA_real_,
+        disp_median = NA_real_,
+        disp_p95 = NA_real_,
+        disp_max = NA_real_,
+        fd_error = NA_real_,
+        trans_rmse = NA_real_,
+        rot_rmse = NA_real_,
+        corr_to_truth = NA_real_,
+        mse_to_truth = NA_real_,
+        stringsAsFactors = FALSE
+      ))
+    }
+    prof <- run_profiled_command(
+      command = file.path(R.home("bin"), "Rscript"),
+      args = c(
+        "inst/benchmarks/run_afni_3dvolreg_realdata.R",
+        "--input", input_path,
+        "--out-dir", method_dir,
+        "--base-index", as.character(base_index),
+        "--image", opts$afni_image,
+        "--platform", opts$afni_platform
+      ),
+      stdout_path = stdout_path,
+      stderr_path = stderr_path
+    )
+    meta <- data.frame(
+      method = method,
+      method_model = paste(opts$afni_image, base_index, sep = ":base="),
+      stringsAsFactors = FALSE
+    )
+  } else {
+    stop("Unknown method: ", method, call. = FALSE)
   }
 
   if (!identical(prof$status, 0L)) {
@@ -341,23 +429,29 @@ paired <- list()
 pair_idx <- 1L
 for (sc in unique(raw$scenario)) {
   a <- raw[raw$scenario == sc & raw$method == "volregger" & raw$status == "ok", ]
-  b <- raw[raw$scenario == sc & raw$method == "nifreeze" & raw$status == "ok", ]
-  if (!nrow(a) || !nrow(b)) {
+  if (!nrow(a)) {
     next
   }
-  paired[[pair_idx]] <- data.frame(
-    scenario = sc,
-    dataset_mode = a$dataset_mode[1],
-    elapsed_ratio = a$elapsed_sec / b$elapsed_sec,
-    temp_bytes_ratio = a$temp_bytes_written / max(b$temp_bytes_written, 1e-8),
-    disp_median_ratio = a$disp_median / max(b$disp_median, 1e-8),
-    disp_p95_ratio = a$disp_p95 / max(b$disp_p95, 1e-8),
-    fd_error_ratio = a$fd_error / max(b$fd_error, 1e-8),
-    tsnr_ratio_ratio = a$tsnr_ratio / max(b$tsnr_ratio, 1e-8),
-    blur_ratio_ratio = a$blur_proxy_ratio / max(b$blur_proxy_ratio, 1e-8),
-    stringsAsFactors = FALSE
-  )
-  pair_idx <- pair_idx + 1L
+  for (baseline in setdiff(unique(raw$method), "volregger")) {
+    b <- raw[raw$scenario == sc & raw$method == baseline & raw$status == "ok", ]
+    if (!nrow(b)) {
+      next
+    }
+    paired[[pair_idx]] <- data.frame(
+      scenario = sc,
+      dataset_mode = a$dataset_mode[1],
+      baseline = baseline,
+      elapsed_ratio = a$elapsed_sec / b$elapsed_sec,
+      temp_bytes_ratio = a$temp_bytes_written / max(b$temp_bytes_written, 1e-8),
+      disp_median_ratio = a$disp_median / max(b$disp_median, 1e-8),
+      disp_p95_ratio = a$disp_p95 / max(b$disp_p95, 1e-8),
+      fd_error_ratio = a$fd_error / max(b$fd_error, 1e-8),
+      tsnr_ratio_ratio = a$tsnr_ratio / max(b$tsnr_ratio, 1e-8),
+      blur_ratio_ratio = a$blur_proxy_ratio / max(b$blur_proxy_ratio, 1e-8),
+      stringsAsFactors = FALSE
+    )
+    pair_idx <- pair_idx + 1L
+  }
 }
 paired <- if (length(paired)) do.call(rbind, paired) else data.frame()
 paired_csv <- file.path(out_dir, "benchmark_vs_nifreeze_realdata_paired.csv")
