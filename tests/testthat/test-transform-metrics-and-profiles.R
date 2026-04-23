@@ -77,3 +77,51 @@ test_that("fit summaries and tabular output expose richer QC fields", {
   expect_true("fit_failures" %in% names(sm))
   expect_true(all(c("cost_drop", "motion_spike", "fit_failure", "censor_suggest") %in% names(tab)))
 })
+
+test_that("real-data benchmark truth metrics expose a broad scorecard", {
+  env <- new.env(parent = globalenv())
+  source(testthat::test_path("..", "..", "inst", "benchmarks", "realdata_benchmark_lib.R"), local = env)
+
+  mask <- array(TRUE, dim = c(3, 3, 3))
+  base <- array(seq_len(prod(dim(mask))), dim = dim(mask))
+  clean <- array(NA_real_, dim = c(dim(mask), 4))
+  for (i in seq_len(dim(clean)[4])) {
+    clean[, , , i] <- base + i
+  }
+  attr(clean, "pixdim") <- c(2, 2, 2)
+
+  truth <- array(rep(diag(4), dim(clean)[4]), dim = c(4, 4, dim(clean)[4]))
+  metrics <- env$compute_benchmark_metrics(
+    input_run = clean,
+    corrected = clean,
+    mask = mask,
+    motion_mats = truth,
+    truth = truth,
+    clean = clean
+  )
+
+  expected <- c(
+    "disp_p95",
+    "fd_error",
+    "trans_abs_p95",
+    "rot_abs_deg_p95",
+    "rel_frob_p95",
+    "rel_rot_deg_p95",
+    "mae_to_truth",
+    "nrmse_to_truth",
+    "residual_dvars_to_truth",
+    "temporal_corr_to_truth",
+    "edge_ratio_to_truth"
+  )
+
+  expect_true(all(expected %in% names(metrics)))
+  expect_true(all(env$benchmark_metric_names() %in% names(env$empty_benchmark_metrics())))
+  expect_equal(metrics$mae_to_truth, 0, tolerance = 1e-12)
+  expect_equal(metrics$nrmse_to_truth, 0, tolerance = 1e-12)
+  expect_equal(metrics$residual_dvars_to_truth, 0, tolerance = 1e-12)
+  expect_equal(metrics$trans_abs_p95, 0, tolerance = 1e-12)
+  expect_equal(metrics$rot_abs_deg_p95, 0, tolerance = 1e-12)
+  expect_equal(metrics$rel_frob_p95, 0, tolerance = 1e-12)
+  expect_equal(metrics$temporal_corr_to_truth, 1, tolerance = 1e-12)
+  expect_equal(metrics$edge_ratio_to_truth, 1, tolerance = 1e-12)
+})

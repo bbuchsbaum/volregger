@@ -227,42 +227,23 @@ run_one <- function(method, scenario_name) {
     )
   } else if (identical(method, "nifreeze")) {
     if (!isTRUE(nifreeze_probe$available)) {
-      return(data.frame(
-        method = method,
-        dataset_mode = dataset_mode,
-        scenario = scenario_name,
-        method_model = opts$nifreeze_model,
-        elapsed_sec = NA_real_,
-        estimate_sec = NA_real_,
-        apply_sec = NA_real_,
-        report_sec = NA_real_,
-        peak_rss_mb = NA_real_,
-        temp_bytes_written = NA_real_,
-        status = "unavailable",
-        error = nifreeze_probe$message,
-        fit_fail_rate = NA_real_,
-        fd_mean = NA_real_,
-        fd_p95 = NA_real_,
-        dvars_before_mean = NA_real_,
-        dvars_before_p95 = NA_real_,
-        dvars_after_mean = NA_real_,
-        dvars_after_p95 = NA_real_,
-        dvars_ratio = NA_real_,
-        tsnr_before = NA_real_,
-        tsnr_after = NA_real_,
-        tsnr_ratio = NA_real_,
-        blur_proxy_before = NA_real_,
-        blur_proxy_after = NA_real_,
-        blur_proxy_ratio = NA_real_,
-        disp_median = NA_real_,
-        disp_p95 = NA_real_,
-        disp_max = NA_real_,
-        fd_error = NA_real_,
-        trans_rmse = NA_real_,
-        rot_rmse = NA_real_,
-        corr_to_truth = NA_real_,
-        mse_to_truth = NA_real_,
-        stringsAsFactors = FALSE
+      return(cbind(
+        data.frame(
+          method = method,
+          dataset_mode = dataset_mode,
+          scenario = scenario_name,
+          method_model = opts$nifreeze_model,
+          elapsed_sec = NA_real_,
+          estimate_sec = NA_real_,
+          apply_sec = NA_real_,
+          report_sec = NA_real_,
+          peak_rss_mb = NA_real_,
+          temp_bytes_written = NA_real_,
+          status = "unavailable",
+          error = nifreeze_probe$message,
+          stringsAsFactors = FALSE
+        ),
+        empty_benchmark_metrics()
       ))
     }
 
@@ -307,42 +288,23 @@ run_one <- function(method, scenario_name) {
     )
   } else if (identical(method, "afni_3dvolreg")) {
     if (!isTRUE(afni_probe$available)) {
-      return(data.frame(
-        method = method,
-        dataset_mode = dataset_mode,
-        scenario = scenario_name,
-        method_model = paste(opts$afni_image, base_index, sep = ":base="),
-        elapsed_sec = NA_real_,
-        estimate_sec = NA_real_,
-        apply_sec = NA_real_,
-        report_sec = NA_real_,
-        peak_rss_mb = NA_real_,
-        temp_bytes_written = NA_real_,
-        status = "unavailable",
-        error = afni_probe$message,
-        fit_fail_rate = NA_real_,
-        fd_mean = NA_real_,
-        fd_p95 = NA_real_,
-        dvars_before_mean = NA_real_,
-        dvars_before_p95 = NA_real_,
-        dvars_after_mean = NA_real_,
-        dvars_after_p95 = NA_real_,
-        dvars_ratio = NA_real_,
-        tsnr_before = NA_real_,
-        tsnr_after = NA_real_,
-        tsnr_ratio = NA_real_,
-        blur_proxy_before = NA_real_,
-        blur_proxy_after = NA_real_,
-        blur_proxy_ratio = NA_real_,
-        disp_median = NA_real_,
-        disp_p95 = NA_real_,
-        disp_max = NA_real_,
-        fd_error = NA_real_,
-        trans_rmse = NA_real_,
-        rot_rmse = NA_real_,
-        corr_to_truth = NA_real_,
-        mse_to_truth = NA_real_,
-        stringsAsFactors = FALSE
+      return(cbind(
+        data.frame(
+          method = method,
+          dataset_mode = dataset_mode,
+          scenario = scenario_name,
+          method_model = paste(opts$afni_image, base_index, sep = ":base="),
+          elapsed_sec = NA_real_,
+          estimate_sec = NA_real_,
+          apply_sec = NA_real_,
+          report_sec = NA_real_,
+          peak_rss_mb = NA_real_,
+          temp_bytes_written = NA_real_,
+          status = "unavailable",
+          error = afni_probe$message,
+          stringsAsFactors = FALSE
+        ),
+        empty_benchmark_metrics()
       ))
     }
     prof <- run_profiled_command(
@@ -369,42 +331,23 @@ run_one <- function(method, scenario_name) {
 
   if (!identical(prof$status, 0L)) {
     stage_times <- read_stage_times_csv(stage_path, total_sec = prof$elapsed_sec)
-    return(data.frame(
-      method = method,
-      dataset_mode = dataset_mode,
-      scenario = scenario_name,
-      method_model = meta$method_model,
-      elapsed_sec = prof$elapsed_sec,
-      estimate_sec = stage_times$estimate_sec,
-      apply_sec = stage_times$apply_sec,
-      report_sec = stage_times$report_sec,
-      peak_rss_mb = prof$peak_rss_mb,
-      temp_bytes_written = dir_size_bytes(method_dir),
-      status = "error",
-      error = method_error_message(stderr_path),
-      fit_fail_rate = NA_real_,
-      fd_mean = NA_real_,
-      fd_p95 = NA_real_,
-      dvars_before_mean = NA_real_,
-      dvars_before_p95 = NA_real_,
-      dvars_after_mean = NA_real_,
-      dvars_after_p95 = NA_real_,
-      dvars_ratio = NA_real_,
-      tsnr_before = NA_real_,
-      tsnr_after = NA_real_,
-      tsnr_ratio = NA_real_,
-      blur_proxy_before = NA_real_,
-      blur_proxy_after = NA_real_,
-      blur_proxy_ratio = NA_real_,
-      disp_median = NA_real_,
-      disp_p95 = NA_real_,
-      disp_max = NA_real_,
-      fd_error = NA_real_,
-      trans_rmse = NA_real_,
-      rot_rmse = NA_real_,
-      corr_to_truth = NA_real_,
-      mse_to_truth = NA_real_,
-      stringsAsFactors = FALSE
+    return(cbind(
+      data.frame(
+        method = method,
+        dataset_mode = dataset_mode,
+        scenario = scenario_name,
+        method_model = meta$method_model,
+        elapsed_sec = prof$elapsed_sec,
+        estimate_sec = stage_times$estimate_sec,
+        apply_sec = stage_times$apply_sec,
+        report_sec = stage_times$report_sec,
+        peak_rss_mb = prof$peak_rss_mb,
+        temp_bytes_written = dir_size_bytes(method_dir),
+        status = "error",
+        error = method_error_message(stderr_path),
+        stringsAsFactors = FALSE
+      ),
+      empty_benchmark_metrics()
     ))
   }
 
@@ -462,6 +405,20 @@ safe_ratio <- function(x, y) {
   x / max(y, 1e-8)
 }
 
+safe_delta <- function(x, y) {
+  if (!is.finite(x) || !is.finite(y)) {
+    return(NA_real_)
+  }
+  x - y
+}
+
+safe_unit_error_ratio <- function(x, y) {
+  if (!is.finite(x) || !is.finite(y)) {
+    return(NA_real_)
+  }
+  abs(x - 1) / max(abs(y - 1), 1e-8)
+}
+
 paired <- list()
 pair_idx <- 1L
 for (sc in unique(raw$scenario)) {
@@ -486,8 +443,19 @@ for (sc in unique(raw$scenario)) {
       disp_median_ratio = safe_ratio(a$disp_median, b$disp_median),
       disp_p95_ratio = safe_ratio(a$disp_p95, b$disp_p95),
       fd_error_ratio = safe_ratio(a$fd_error, b$fd_error),
+      trans_abs_p95_ratio = safe_ratio(a$trans_abs_p95, b$trans_abs_p95),
+      rot_abs_deg_p95_ratio = safe_ratio(a$rot_abs_deg_p95, b$rot_abs_deg_p95),
+      rel_frob_p95_ratio = safe_ratio(a$rel_frob_p95, b$rel_frob_p95),
+      rel_rot_deg_p95_ratio = safe_ratio(a$rel_rot_deg_p95, b$rel_rot_deg_p95),
+      mse_to_truth_ratio = safe_ratio(a$mse_to_truth, b$mse_to_truth),
+      mae_to_truth_ratio = safe_ratio(a$mae_to_truth, b$mae_to_truth),
+      nrmse_to_truth_ratio = safe_ratio(a$nrmse_to_truth, b$nrmse_to_truth),
+      residual_dvars_to_truth_ratio = safe_ratio(a$residual_dvars_to_truth, b$residual_dvars_to_truth),
       tsnr_ratio_ratio = safe_ratio(a$tsnr_ratio, b$tsnr_ratio),
       blur_ratio_ratio = safe_ratio(a$blur_proxy_ratio, b$blur_proxy_ratio),
+      corr_to_truth_delta = safe_delta(a$corr_to_truth, b$corr_to_truth),
+      temporal_corr_to_truth_delta = safe_delta(a$temporal_corr_to_truth, b$temporal_corr_to_truth),
+      edge_ratio_to_truth_error_ratio = safe_unit_error_ratio(a$edge_ratio_to_truth, b$edge_ratio_to_truth),
       stringsAsFactors = FALSE
     )
     pair_idx <- pair_idx + 1L
@@ -581,6 +549,11 @@ print(raw[, c(
   "report_sec",
   "disp_p95",
   "fd_error",
+  "trans_abs_p95",
+  "rot_abs_deg_p95",
+  "mae_to_truth",
+  "nrmse_to_truth",
+  "temporal_corr_to_truth",
   "tsnr_ratio",
   "blur_proxy_ratio"
 )])

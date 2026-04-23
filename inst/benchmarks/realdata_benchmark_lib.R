@@ -351,6 +351,154 @@ masked_frame_mse <- function(a, b, mask) {
   mean(vals, na.rm = TRUE)
 }
 
+masked_frame_mae <- function(a, b, mask) {
+  nt <- dim(a)[4]
+  vals <- vapply(seq_len(nt), function(i) {
+    mean(abs(a[, , , i][mask] - b[, , , i][mask]), na.rm = TRUE)
+  }, numeric(1))
+  mean(vals, na.rm = TRUE)
+}
+
+masked_values_4d <- function(x, mask) {
+  dim3 <- dim(mask)
+  nxyz <- prod(dim3)
+  nt <- dim(x)[4]
+  idx <- which(as.array(mask))
+  matrix(as.numeric(x), nrow = nxyz, ncol = nt)[idx, , drop = FALSE]
+}
+
+masked_frame_nrmse <- function(a, b, mask) {
+  mse <- masked_frame_mse(a, b, mask)
+  truth_vals <- as.numeric(masked_values_4d(b, mask))
+  scale <- stats::sd(truth_vals, na.rm = TRUE)
+  if (!is.finite(scale) || scale < 1e-8) {
+    scale <- mean(abs(truth_vals), na.rm = TRUE)
+  }
+  sqrt(mse) / max(scale, 1e-8)
+}
+
+masked_residual_dvars <- function(a, b, mask) {
+  residual <- a - b
+  vals <- dvars(residual, mask = mask, robust = FALSE)
+  mean(vals, na.rm = TRUE)
+}
+
+masked_temporal_corr <- function(a, b, mask) {
+  amat <- masked_values_4d(a, mask)
+  bmat <- masked_values_4d(b, mask)
+  if (!nrow(amat)) {
+    return(NA_real_)
+  }
+  vals <- vapply(seq_len(nrow(amat)), function(i) {
+    if (stats::sd(amat[i, ], na.rm = TRUE) <= 1e-8 || stats::sd(bmat[i, ], na.rm = TRUE) <= 1e-8) {
+      return(NA_real_)
+    }
+    stats::cor(amat[i, ], bmat[i, ], use = "complete.obs")
+  }, numeric(1))
+  stats::median(vals, na.rm = TRUE)
+}
+
+masked_edge_ratio_to_truth <- function(corrected, clean, mask) {
+  clean_edge <- compute_blur_proxy(clean, mask)
+  corrected_edge <- compute_blur_proxy(corrected, mask)
+  corrected_edge / max(clean_edge, 1e-8)
+}
+
+motion_matrix_error_summary <- function(motion_mats, truth) {
+  mats <- motion_matrices(motion_mats)
+  ref <- motion_matrices(truth)
+  nt <- dim(mats)[3]
+  if (dim(ref)[3] != nt) {
+    stop("truth must contain the same number of frames as motion", call. = FALSE)
+  }
+
+  pose <- motion_mats_to_pose(mats)
+  truth_pose <- motion_mats_to_pose(ref)
+  err <- pose - truth_pose
+
+  rel_frob <- numeric(nt)
+  rel_rot_deg <- numeric(nt)
+  det_error <- numeric(nt)
+  for (i in seq_len(nt)) {
+    dmat <- mats[, , i] %*% solve(ref[, , i])
+    rel_frob[i] <- sqrt(sum((dmat - diag(4))^2))
+    R <- dmat[1:3, 1:3, drop = FALSE]
+    angle <- acos(max(-1, min(1, (sum(diag(R)) - 1) / 2)))
+    rel_rot_deg[i] <- angle * 180 / pi
+    det_error[i] <- abs(det(mats[1:3, 1:3, i]) - 1)
+  }
+
+  list(
+    trans_abs_median = stats::median(sqrt(rowSums(err[, 1:3, drop = FALSE]^2)), na.rm = TRUE),
+    trans_abs_p95 = unname(stats::quantile(sqrt(rowSums(err[, 1:3, drop = FALSE]^2)), probs = 0.95, na.rm = TRUE)),
+    tx_mae = mean(abs(err[, 1]), na.rm = TRUE),
+    ty_mae = mean(abs(err[, 2]), na.rm = TRUE),
+    tz_mae = mean(abs(err[, 3]), na.rm = TRUE),
+    rot_abs_deg_median = stats::median(sqrt(rowSums(err[, 4:6, drop = FALSE]^2)) * 180 / pi, na.rm = TRUE),
+    rot_abs_deg_p95 = unname(stats::quantile(sqrt(rowSums(err[, 4:6, drop = FALSE]^2)) * 180 / pi, probs = 0.95, na.rm = TRUE)),
+    rx_mae_deg = mean(abs(err[, 4]) * 180 / pi, na.rm = TRUE),
+    ry_mae_deg = mean(abs(err[, 5]) * 180 / pi, na.rm = TRUE),
+    rz_mae_deg = mean(abs(err[, 6]) * 180 / pi, na.rm = TRUE),
+    rel_frob_median = stats::median(rel_frob, na.rm = TRUE),
+    rel_frob_p95 = unname(stats::quantile(rel_frob, probs = 0.95, na.rm = TRUE)),
+    rel_rot_deg_median = stats::median(rel_rot_deg, na.rm = TRUE),
+    rel_rot_deg_p95 = unname(stats::quantile(rel_rot_deg, probs = 0.95, na.rm = TRUE)),
+    affine_det_error_max = max(det_error, na.rm = TRUE)
+  )
+}
+
+benchmark_metric_names <- function() {
+  c(
+    "fit_fail_rate",
+    "fd_mean",
+    "fd_p95",
+    "dvars_before_mean",
+    "dvars_before_p95",
+    "dvars_after_mean",
+    "dvars_after_p95",
+    "dvars_ratio",
+    "tsnr_before",
+    "tsnr_after",
+    "blur_proxy_before",
+    "blur_proxy_after",
+    "tsnr_ratio",
+    "blur_proxy_ratio",
+    "disp_median",
+    "disp_p95",
+    "disp_max",
+    "fd_error",
+    "trans_rmse",
+    "rot_rmse",
+    "trans_abs_median",
+    "trans_abs_p95",
+    "tx_mae",
+    "ty_mae",
+    "tz_mae",
+    "rot_abs_deg_median",
+    "rot_abs_deg_p95",
+    "rx_mae_deg",
+    "ry_mae_deg",
+    "rz_mae_deg",
+    "rel_frob_median",
+    "rel_frob_p95",
+    "rel_rot_deg_median",
+    "rel_rot_deg_p95",
+    "affine_det_error_max",
+    "corr_to_truth",
+    "mse_to_truth",
+    "mae_to_truth",
+    "nrmse_to_truth",
+    "residual_dvars_to_truth",
+    "temporal_corr_to_truth",
+    "edge_ratio_to_truth"
+  )
+}
+
+empty_benchmark_metrics <- function() {
+  vals <- stats::setNames(rep(NA_real_, length(benchmark_metric_names())), benchmark_metric_names())
+  as.data.frame(as.list(vals), stringsAsFactors = FALSE)
+}
+
 compute_benchmark_metrics <- function(input_run, corrected, mask, motion_mats, truth = NULL, clean = NULL) {
   fd <- fd_from_transform(motion_mats)
   dvars_before <- dvars(input_run, robust = FALSE)
@@ -391,6 +539,9 @@ compute_benchmark_metrics <- function(input_run, corrected, mask, motion_mats, t
     out$fd_error <- stats::median(truth_disp$fd_error, na.rm = TRUE)
     out$trans_rmse <- sqrt(mean(err[, 1:3, drop = FALSE]^2, na.rm = TRUE))
     out$rot_rmse <- sqrt(mean(err[, 4:6, drop = FALSE]^2, na.rm = TRUE))
+
+    matrix_err <- motion_matrix_error_summary(motion_mats, truth)
+    out <- c(out, matrix_err)
   } else {
     out$disp_median <- NA_real_
     out$disp_p95 <- NA_real_
@@ -398,14 +549,39 @@ compute_benchmark_metrics <- function(input_run, corrected, mask, motion_mats, t
     out$fd_error <- NA_real_
     out$trans_rmse <- NA_real_
     out$rot_rmse <- NA_real_
+    out$trans_abs_median <- NA_real_
+    out$trans_abs_p95 <- NA_real_
+    out$tx_mae <- NA_real_
+    out$ty_mae <- NA_real_
+    out$tz_mae <- NA_real_
+    out$rot_abs_deg_median <- NA_real_
+    out$rot_abs_deg_p95 <- NA_real_
+    out$rx_mae_deg <- NA_real_
+    out$ry_mae_deg <- NA_real_
+    out$rz_mae_deg <- NA_real_
+    out$rel_frob_median <- NA_real_
+    out$rel_frob_p95 <- NA_real_
+    out$rel_rot_deg_median <- NA_real_
+    out$rel_rot_deg_p95 <- NA_real_
+    out$affine_det_error_max <- NA_real_
   }
 
   if (!is.null(clean)) {
     out$corr_to_truth <- masked_frame_correlation(corrected, clean, mask)
     out$mse_to_truth <- masked_frame_mse(corrected, clean, mask)
+    out$mae_to_truth <- masked_frame_mae(corrected, clean, mask)
+    out$nrmse_to_truth <- masked_frame_nrmse(corrected, clean, mask)
+    out$residual_dvars_to_truth <- masked_residual_dvars(corrected, clean, mask)
+    out$temporal_corr_to_truth <- masked_temporal_corr(corrected, clean, mask)
+    out$edge_ratio_to_truth <- masked_edge_ratio_to_truth(corrected, clean, mask)
   } else {
     out$corr_to_truth <- NA_real_
     out$mse_to_truth <- NA_real_
+    out$mae_to_truth <- NA_real_
+    out$nrmse_to_truth <- NA_real_
+    out$residual_dvars_to_truth <- NA_real_
+    out$temporal_corr_to_truth <- NA_real_
+    out$edge_ratio_to_truth <- NA_real_
   }
 
   as.data.frame(out, stringsAsFactors = FALSE)
