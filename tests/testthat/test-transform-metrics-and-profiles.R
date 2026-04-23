@@ -43,6 +43,19 @@ test_that("volreg_profile exposes named benchmark configurations", {
   expect_equal(prof$control$stencil_n, 1200L)
 })
 
+test_that("fast_native profile targets the native speed frontier", {
+  prof <- volreg_profile("fast_native")
+
+  expect_s3_class(prof, "volreg_profile")
+  expect_equal(prof$engine, "rigid_robust")
+  expect_true(all(c("ic_stencil", "whiten", "fast_native") %in% prof$components))
+  expect_true(isTRUE(prof$control$use_ic_stencil))
+  expect_true(isTRUE(prof$control$whiten_modes))
+  expect_false(isTRUE(prof$control$use_nuisance_marginalization))
+  expect_equal(prof$control$stencil_n, 1000L)
+  expect_equal(prof$control$capture_topk, 4L)
+})
+
 test_that("fit summaries and tabular output expose richer QC fields", {
   set.seed(200)
   x0 <- array(rnorm(8 * 8 * 4), dim = c(8, 8, 4))

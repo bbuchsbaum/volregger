@@ -14,7 +14,9 @@ defaults <- list(
   nifreeze_backend = "docker",
   nifreeze_docker_image = "volregger-nifreeze-benchmark:latest",
   nifreeze_docker_runner = file.path("inst", "benchmarks", "run_nifreeze_realdata_docker.sh"),
-  volreg_profile = "ic_nuisance",
+  volreg_profile = NULL,
+  volreg_profile_native = "fast_native",
+  volreg_profile_truth = "ic_nuisance",
   volreg_ref = "robust_mean",
   nifreeze_model = "mean",
   afni_image = "afni/afni_make_build",
@@ -196,8 +198,14 @@ run_one <- function(method, scenario_name) {
 
   stdout_path <- file.path(method_dir, "stdout.txt")
   stderr_path <- file.path(method_dir, "stderr.txt")
+  stage_path <- file.path(method_dir, "stage_times.csv")
 
   if (identical(method, "volregger")) {
+    volreg_profile <- opts$volreg_profile %||% if (identical(dataset_mode, "native")) {
+      opts$volreg_profile_native
+    } else {
+      opts$volreg_profile_truth
+    }
     prof <- run_profiled_command(
       command = file.path(R.home("bin"), "Rscript"),
       args = c(
@@ -205,7 +213,7 @@ run_one <- function(method, scenario_name) {
         "--input", input_path,
         "--mask", mask_path,
         "--out-dir", method_dir,
-        "--profile", opts$volreg_profile,
+        "--profile", volreg_profile,
         "--ref", opts$volreg_ref,
         "--nthreads", opts$nthreads
       ),
@@ -214,7 +222,7 @@ run_one <- function(method, scenario_name) {
     )
     meta <- data.frame(
       method = method,
-      method_model = paste(opts$volreg_profile, opts$volreg_ref, sep = ":"),
+      method_model = paste(volreg_profile, opts$volreg_ref, sep = ":"),
       stringsAsFactors = FALSE
     )
   } else if (identical(method, "nifreeze")) {
@@ -225,6 +233,9 @@ run_one <- function(method, scenario_name) {
         scenario = scenario_name,
         method_model = opts$nifreeze_model,
         elapsed_sec = NA_real_,
+        estimate_sec = NA_real_,
+        apply_sec = NA_real_,
+        report_sec = NA_real_,
         peak_rss_mb = NA_real_,
         temp_bytes_written = NA_real_,
         status = "unavailable",
@@ -302,6 +313,9 @@ run_one <- function(method, scenario_name) {
         scenario = scenario_name,
         method_model = paste(opts$afni_image, base_index, sep = ":base="),
         elapsed_sec = NA_real_,
+        estimate_sec = NA_real_,
+        apply_sec = NA_real_,
+        report_sec = NA_real_,
         peak_rss_mb = NA_real_,
         temp_bytes_written = NA_real_,
         status = "unavailable",
@@ -354,12 +368,16 @@ run_one <- function(method, scenario_name) {
   }
 
   if (!identical(prof$status, 0L)) {
+    stage_times <- read_stage_times_csv(stage_path, total_sec = prof$elapsed_sec)
     return(data.frame(
       method = method,
       dataset_mode = dataset_mode,
       scenario = scenario_name,
       method_model = meta$method_model,
       elapsed_sec = prof$elapsed_sec,
+      estimate_sec = stage_times$estimate_sec,
+      apply_sec = stage_times$apply_sec,
+      report_sec = stage_times$report_sec,
       peak_rss_mb = prof$peak_rss_mb,
       temp_bytes_written = dir_size_bytes(method_dir),
       status = "error",
@@ -396,6 +414,7 @@ run_one <- function(method, scenario_name) {
   attr(corrected, "tr") <- attr(input_run, "tr")
   attr(corrected, "affine") <- attr(input_run, "affine")
   mats <- read_motion_matrix_csv(file.path(method_dir, "motion_mats.csv"))
+  stage_times <- read_stage_times_csv(stage_path, total_sec = prof$elapsed_sec)
   metrics <- compute_benchmark_metrics(
     input_run = input_run,
     corrected = corrected,
@@ -412,6 +431,9 @@ run_one <- function(method, scenario_name) {
       scenario = scenario_name,
       method_model = meta$method_model,
       elapsed_sec = prof$elapsed_sec,
+      estimate_sec = stage_times$estimate_sec,
+      apply_sec = stage_times$apply_sec,
+      report_sec = stage_times$report_sec,
       peak_rss_mb = prof$peak_rss_mb,
       temp_bytes_written = dir_size_bytes(method_dir),
       status = "ok",
@@ -433,6 +455,13 @@ raw <- do.call(rbind, rows)
 raw_csv <- file.path(out_dir, "benchmark_vs_nifreeze_realdata_raw.csv")
 utils::write.csv(raw, raw_csv, row.names = FALSE)
 
+safe_ratio <- function(x, y) {
+  if (!is.finite(x) || !is.finite(y)) {
+    return(NA_real_)
+  }
+  x / max(y, 1e-8)
+}
+
 paired <- list()
 pair_idx <- 1L
 for (sc in unique(raw$scenario)) {
@@ -449,13 +478,16 @@ for (sc in unique(raw$scenario)) {
       scenario = sc,
       dataset_mode = a$dataset_mode[1],
       baseline = baseline,
-      elapsed_ratio = a$elapsed_sec / b$elapsed_sec,
-      temp_bytes_ratio = a$temp_bytes_written / max(b$temp_bytes_written, 1e-8),
-      disp_median_ratio = a$disp_median / max(b$disp_median, 1e-8),
-      disp_p95_ratio = a$disp_p95 / max(b$disp_p95, 1e-8),
-      fd_error_ratio = a$fd_error / max(b$fd_error, 1e-8),
-      tsnr_ratio_ratio = a$tsnr_ratio / max(b$tsnr_ratio, 1e-8),
-      blur_ratio_ratio = a$blur_proxy_ratio / max(b$blur_proxy_ratio, 1e-8),
+      elapsed_ratio = safe_ratio(a$elapsed_sec, b$elapsed_sec),
+      estimate_ratio = safe_ratio(a$estimate_sec, b$estimate_sec),
+      apply_ratio = safe_ratio(a$apply_sec, b$apply_sec),
+      report_ratio = safe_ratio(a$report_sec, b$report_sec),
+      temp_bytes_ratio = safe_ratio(a$temp_bytes_written, b$temp_bytes_written),
+      disp_median_ratio = safe_ratio(a$disp_median, b$disp_median),
+      disp_p95_ratio = safe_ratio(a$disp_p95, b$disp_p95),
+      fd_error_ratio = safe_ratio(a$fd_error, b$fd_error),
+      tsnr_ratio_ratio = safe_ratio(a$tsnr_ratio, b$tsnr_ratio),
+      blur_ratio_ratio = safe_ratio(a$blur_proxy_ratio, b$blur_proxy_ratio),
       stringsAsFactors = FALSE
     )
     pair_idx <- pair_idx + 1L
@@ -538,4 +570,17 @@ cat(" -", paired_csv, "\n")
 cat(" -", solution_summary_csv, "\n")
 cat(" -", solution_frames_csv, "\n")
 cat(" -", file.path(out_dir, "scenario_manifest.csv"), "\n\n")
-print(raw[, c("method", "dataset_mode", "scenario", "status", "elapsed_sec", "disp_p95", "fd_error", "tsnr_ratio", "blur_proxy_ratio")])
+print(raw[, c(
+  "method",
+  "dataset_mode",
+  "scenario",
+  "status",
+  "elapsed_sec",
+  "estimate_sec",
+  "apply_sec",
+  "report_sec",
+  "disp_p95",
+  "fd_error",
+  "tsnr_ratio",
+  "blur_proxy_ratio"
+)])

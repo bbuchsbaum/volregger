@@ -111,7 +111,9 @@ afni_args <- docker_args(
     opts$input
   )
 )
+start_elapsed <- proc.time()[["elapsed"]]
 status <- system2("docker", args = afni_args)
+elapsed_sec <- proc.time()[["elapsed"]] - start_elapsed
 if (!identical(as.integer(status), 0L)) {
   quit(status = as.integer(status))
 }
@@ -120,6 +122,16 @@ img <- RNifti::readNifti(opts$input)
 aff12 <- read_afni_aff12(aff12_path)
 motion_mats <- convert_afni_mats(aff12, img)
 write_motion_matrix_csv(motion_mats, file.path(opts$out_dir, "motion_mats.csv"))
+write_stage_times_csv(
+  data.frame(
+    estimate_sec = NA_real_,
+    apply_sec = NA_real_,
+    report_sec = 0,
+    total_sec = as.numeric(elapsed_sec),
+    stringsAsFactors = FALSE
+  ),
+  file.path(opts$out_dir, "stage_times.csv")
+)
 
 write.csv(
   data.frame(

@@ -545,6 +545,51 @@ run_profiled_command <- function(command, args, stdout_path, stderr_path) {
   )
 }
 
+time_expr <- function(expr) {
+  start <- proc.time()[["elapsed"]]
+  value <- force(expr)
+  elapsed <- proc.time()[["elapsed"]] - start
+  list(value = value, elapsed_sec = as.numeric(elapsed))
+}
+
+default_stage_times <- function(total_sec = NA_real_) {
+  data.frame(
+    estimate_sec = NA_real_,
+    apply_sec = NA_real_,
+    report_sec = 0,
+    total_sec = as.numeric(total_sec),
+    stringsAsFactors = FALSE
+  )
+}
+
+write_stage_times_csv <- function(stage_times, path) {
+  required <- c("estimate_sec", "apply_sec", "report_sec", "total_sec")
+  miss <- setdiff(required, names(stage_times))
+  if (length(miss)) {
+    stop("stage_times is missing required columns: ", paste(miss, collapse = ", "), call. = FALSE)
+  }
+  utils::write.csv(stage_times[, required, drop = FALSE], path, row.names = FALSE)
+  invisible(path)
+}
+
+read_stage_times_csv <- function(path, total_sec = NA_real_) {
+  if (!file.exists(path)) {
+    return(default_stage_times(total_sec = total_sec))
+  }
+  dat <- utils::read.csv(path, check.names = FALSE)
+  if (!nrow(dat)) {
+    return(default_stage_times(total_sec = total_sec))
+  }
+  out <- default_stage_times(total_sec = total_sec)
+  for (nm in intersect(names(out), names(dat))) {
+    out[[nm]] <- as.numeric(dat[[nm]][1])
+  }
+  if (!is.finite(out$total_sec) && is.finite(total_sec)) {
+    out$total_sec <- as.numeric(total_sec)
+  }
+  out
+}
+
 method_error_message <- function(stderr_path) {
   helper_error <- file.path(dirname(stderr_path), "error.txt")
   if (file.exists(helper_error)) {

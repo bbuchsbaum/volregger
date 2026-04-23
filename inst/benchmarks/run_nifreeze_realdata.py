@@ -7,6 +7,7 @@ import csv
 import shutil
 import sys
 import tempfile
+import time
 import types
 from collections import namedtuple
 from pathlib import Path
@@ -64,6 +65,21 @@ def _write_motion_csv(mats: np.ndarray, path: Path) -> None:
             values = mats[i].reshape(-1, order="F")
             row.update({fieldnames[j + 1]: float(values[j]) for j in range(16)})
             writer.writerow(row)
+
+
+def _write_stage_times(path: Path, estimate_sec: float, apply_sec: float, report_sec: float = 0.0) -> None:
+    fieldnames = ["estimate_sec", "apply_sec", "report_sec", "total_sec"]
+    with path.open("w", newline="") as fobj:
+        writer = csv.DictWriter(fobj, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerow(
+            {
+                "estimate_sec": float(estimate_sec),
+                "apply_sec": float(apply_sec),
+                "report_sec": float(report_sec),
+                "total_sec": float(estimate_sec + apply_sec + report_sec),
+            }
+        )
 
 
 def _model_stat(model: str) -> str:
@@ -137,6 +153,7 @@ def main(argv: list[str] | None = None) -> int:
     header = img.header.copy()
     motion_affines = np.repeat(np.eye(4)[None, ...], data.shape[-1], axis=0)
 
+    estimate_start = time.perf_counter()
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_path = Path(tmp_dir)
         for i in range(data.shape[-1]):
@@ -160,12 +177,16 @@ def main(argv: list[str] | None = None) -> int:
                 seed=args.seed,
             )
             motion_affines[i] = xform.matrix
+    estimate_sec = time.perf_counter() - estimate_start
 
+    apply_start = time.perf_counter()
     corrected = _resample_corrected(data, affine, header, motion_affines)
     corrected_path = out_dir / "corrected.nii.gz"
     nb.Nifti1Image(corrected, affine, header).to_filename(corrected_path)
+    apply_sec = time.perf_counter() - apply_start
 
     _write_motion_csv(motion_affines, out_dir / "motion_mats.csv")
+    _write_stage_times(out_dir / "stage_times.csv", estimate_sec=estimate_sec, apply_sec=apply_sec)
     with (out_dir / "run_metadata.csv").open("w", newline="") as fobj:
         writer = csv.DictWriter(fobj, fieldnames=["method", "model", "stat"])
         writer.writeheader()

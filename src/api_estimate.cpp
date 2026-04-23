@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <thread>
 #include <vector>
 
 using namespace Rcpp;
@@ -14,6 +15,45 @@ inline size_t idx4(int i, int j, int k, int t, int nx, int ny, int nz) {
 
 inline int clamp_int(int x, int lo, int hi) {
   return std::max(lo, std::min(hi, x));
+}
+
+inline int effective_thread_count(int requested, size_t work_items) {
+  if (requested <= 1 || work_items <= 1) {
+    return 1;
+  }
+  unsigned int hw = std::thread::hardware_concurrency();
+  int max_threads = hw > 0 ? static_cast<int>(hw) : requested;
+  int out = std::max(1, std::min(requested, max_threads));
+  if (work_items < static_cast<size_t>(2 * out)) {
+    return 1;
+  }
+  return out;
+}
+
+template <typename Fn>
+void parallel_for_range(size_t n, int nthreads, Fn fn) {
+  int workers = effective_thread_count(nthreads, n);
+  if (workers <= 1) {
+    fn(0, n);
+    return;
+  }
+
+  size_t chunk = (n + static_cast<size_t>(workers) - 1) / static_cast<size_t>(workers);
+  std::vector<std::thread> pool;
+  pool.reserve(static_cast<size_t>(workers));
+
+  for (int tid = 0; tid < workers; ++tid) {
+    size_t begin = static_cast<size_t>(tid) * chunk;
+    if (begin >= n) {
+      break;
+    }
+    size_t end = std::min(n, begin + chunk);
+    pool.emplace_back([&, begin, end]() { fn(begin, end); });
+  }
+
+  for (size_t i = 0; i < pool.size(); ++i) {
+    pool[i].join();
+  }
 }
 
 struct Pose6 {
@@ -92,26 +132,30 @@ NumericVector trimmed_mean_template(const NumericVector& data,
                                     int ny,
                                     int nz,
                                     int nt,
-                                    double trim_frac) {
+                                    double trim_frac,
+                                    int nthreads = 1) {
   int nxyz = nx * ny * nz;
   NumericVector out(nxyz);
-  std::vector<double> vals(nt);
   int trim_n = static_cast<int>(std::floor(trim_frac * nt));
   trim_n = std::max(0, std::min(trim_n, (nt - 1) / 2));
 
-  for (int v = 0; v < nxyz; ++v) {
-    for (int t = 0; t < nt; ++t) {
-      vals[t] = data[static_cast<size_t>(v + nxyz * t)];
+  parallel_for_range(static_cast<size_t>(nxyz), nthreads, [&](size_t begin, size_t end) {
+    std::vector<double> vals(static_cast<size_t>(nt));
+    for (size_t vv = begin; vv < end; ++vv) {
+      int v = static_cast<int>(vv);
+      for (int t = 0; t < nt; ++t) {
+        vals[static_cast<size_t>(t)] = data[static_cast<size_t>(v + nxyz * t)];
+      }
+      std::sort(vals.begin(), vals.end());
+      int lo = trim_n;
+      int hi = nt - trim_n;
+      double s = 0.0;
+      for (int i = lo; i < hi; ++i) {
+        s += vals[static_cast<size_t>(i)];
+      }
+      out[v] = s / static_cast<double>(hi - lo);
     }
-    std::sort(vals.begin(), vals.end());
-    int lo = trim_n;
-    int hi = nt - trim_n;
-    double s = 0.0;
-    for (int i = lo; i < hi; ++i) {
-      s += vals[i];
-    }
-    out[v] = s / static_cast<double>(hi - lo);
-  }
+  });
 
   out.attr("dim") = IntegerVector::create(nx, ny, nz);
   return out;
@@ -883,29 +927,54 @@ CostResult evaluate_cost_stencil(const NumericVector& data,
                                  const std::vector<StencilPoint>& stencil,
                                  const Pose6& pose,
                                  double huber_k,
-                                 bool use_overlap_taper) {
+                                 bool use_overlap_taper,
+                                 int nthreads = 1) {
+  int workers = effective_thread_count(nthreads, stencil.size());
+  std::vector<double> ss_local(static_cast<size_t>(workers), 0.0);
+  std::vector<double> wsum_local(static_cast<size_t>(workers), 0.0);
+  std::vector<double> inb_local(static_cast<size_t>(workers), 0.0);
+
+  parallel_for_range(stencil.size(), workers, [&](size_t begin, size_t end) {
+    size_t tid = begin == end ? 0 : begin / std::max<size_t>(1, (stencil.size() + static_cast<size_t>(workers) - 1) / static_cast<size_t>(workers));
+    if (tid >= static_cast<size_t>(workers)) {
+      tid = static_cast<size_t>(workers - 1);
+    }
+    double ss = 0.0;
+    double wsum = 0.0;
+    double inb = 0.0;
+    double src[3];
+
+    for (size_t s = begin; s < end; ++s) {
+      const StencilPoint& p = stencil[s];
+      bool in_bounds = false;
+      fixed_to_moving_vox(p.i, p.j, p.k, nx, ny, nz, pixdim, pose, src, &in_bounds);
+
+      double mv = 0.0;
+      if (in_bounds) {
+        mv = sample_trilinear_frame(data, nx, ny, nz, nxyz, t, src[0], src[1], src[2]);
+        inb += p.w0;
+      }
+
+      double r = mv - p.tval;
+      double ar = std::abs(r);
+      double rho = (ar <= huber_k) ? (r * r) : (2.0 * huber_k * ar - huber_k * huber_k);
+
+      ss += p.w0 * rho;
+      wsum += p.w0;
+    }
+
+    ss_local[tid] = ss;
+    wsum_local[tid] = wsum;
+    inb_local[tid] = inb;
+  });
+
   double ss = 0.0;
   double wsum = 0.0;
   double inb = 0.0;
-  double src[3];
-
-  for (size_t s = 0; s < stencil.size(); ++s) {
-    const StencilPoint& p = stencil[s];
-    bool in_bounds = false;
-    fixed_to_moving_vox(p.i, p.j, p.k, nx, ny, nz, pixdim, pose, src, &in_bounds);
-
-    double mv = 0.0;
-    if (in_bounds) {
-      mv = sample_trilinear_frame(data, nx, ny, nz, nxyz, t, src[0], src[1], src[2]);
-      inb += p.w0;
-    }
-
-    double r = mv - p.tval;
-    double ar = std::abs(r);
-    double rho = (ar <= huber_k) ? (r * r) : (2.0 * huber_k * ar - huber_k * huber_k);
-
-    ss += p.w0 * rho;
-    wsum += p.w0;
+  for (int tid = 0; tid < workers; ++tid) {
+    ss += ss_local[static_cast<size_t>(tid)];
+    wsum += wsum_local[static_cast<size_t>(tid)];
+    inb += inb_local[static_cast<size_t>(tid)];
   }
 
   if (wsum <= 0.0) {
@@ -1136,37 +1205,66 @@ CostResult evaluate_cost_stencil_nuisance(const NumericVector& data,
                                           double huber_k,
                                           bool use_overlap_taper,
                                           int nuisance_dim,
-                                          double nuisance_ridge) {
+                                          double nuisance_ridge,
+                                          int nthreads = 1) {
   if (nuisance_dim <= 0) {
     return evaluate_cost_stencil(
-        data, nx, ny, nz, nxyz, t, pixdim, stencil, pose, huber_k, use_overlap_taper);
+        data, nx, ny, nz, nxyz, t, pixdim, stencil, pose, huber_k, use_overlap_taper, nthreads);
   }
 
   std::vector<double> residual(stencil.size(), 0.0);
-  double src[3];
+  const int p = nuisance_dim;
+  int workers = effective_thread_count(nthreads, stencil.size());
+  std::vector<double> inb_local(static_cast<size_t>(workers), 0.0);
+  std::vector<double> wsum_local(static_cast<size_t>(workers), 0.0);
+  std::vector< std::vector<double> > bt_local(static_cast<size_t>(workers), std::vector<double>(5, 0.0));
+  std::vector< std::vector<double> > btb_local(static_cast<size_t>(workers), std::vector<double>(25, 0.0));
+
+  parallel_for_range(stencil.size(), workers, [&](size_t begin, size_t end) {
+    size_t tid = begin == end ? 0 : begin / std::max<size_t>(1, (stencil.size() + static_cast<size_t>(workers) - 1) / static_cast<size_t>(workers));
+    if (tid >= static_cast<size_t>(workers)) {
+      tid = static_cast<size_t>(workers - 1);
+    }
+    double inb = 0.0;
+    double wsum = 0.0;
+    double src[3];
+
+    for (size_t s = begin; s < end; ++s) {
+      const StencilPoint& pt = stencil[s];
+      bool in_bounds = false;
+      fixed_to_moving_vox(pt.i, pt.j, pt.k, nx, ny, nz, pixdim, pose, src, &in_bounds);
+      double mv = 0.0;
+      if (in_bounds) {
+        mv = sample_trilinear_frame(data, nx, ny, nz, nxyz, t, src[0], src[1], src[2]);
+        inb += pt.w0;
+      }
+      double r = mv - pt.tval;
+      residual[s] = r;
+      wsum += pt.w0;
+      for (int q = 0; q < p; ++q) {
+        double bq = pt.bvec[q];
+        bt_local[tid][static_cast<size_t>(q)] += pt.w0 * bq * r;
+        for (int qq = q; qq < p; ++qq) {
+          btb_local[tid][static_cast<size_t>(q * p + qq)] += pt.w0 * bq * pt.bvec[qq];
+        }
+      }
+    }
+
+    inb_local[tid] = inb;
+    wsum_local[tid] = wsum;
+  });
+
   double inb = 0.0;
   double wsum = 0.0;
-  const int p = nuisance_dim;
   double BtB[25] = {0};
   double bt[5] = {0};
-
-  for (size_t s = 0; s < stencil.size(); ++s) {
-    const StencilPoint& pt = stencil[s];
-    bool in_bounds = false;
-    fixed_to_moving_vox(pt.i, pt.j, pt.k, nx, ny, nz, pixdim, pose, src, &in_bounds);
-    double mv = 0.0;
-    if (in_bounds) {
-      mv = sample_trilinear_frame(data, nx, ny, nz, nxyz, t, src[0], src[1], src[2]);
-      inb += pt.w0;
-    }
-    double r = mv - pt.tval;
-    residual[s] = r;
-    wsum += pt.w0;
+  for (int tid = 0; tid < workers; ++tid) {
+    inb += inb_local[static_cast<size_t>(tid)];
+    wsum += wsum_local[static_cast<size_t>(tid)];
     for (int q = 0; q < p; ++q) {
-      double bq = pt.bvec[q];
-      bt[q] += pt.w0 * bq * r;
+      bt[q] += bt_local[static_cast<size_t>(tid)][static_cast<size_t>(q)];
       for (int qq = q; qq < p; ++qq) {
-        BtB[q * p + qq] += pt.w0 * bq * pt.bvec[qq];
+        BtB[q * p + qq] += btb_local[static_cast<size_t>(tid)][static_cast<size_t>(q * p + qq)];
       }
     }
   }
@@ -1199,20 +1297,33 @@ CostResult evaluate_cost_stencil_nuisance(const NumericVector& data,
   }
   bool solved = solve_linear_small(A, rhs, p, theta);
 
-  double ss = 0.0;
-  for (size_t s = 0; s < stencil.size(); ++s) {
-    const StencilPoint& pt = stencil[s];
-    double r = residual[s];
-    if (solved) {
-      double proj = 0.0;
-      for (int q = 0; q < p; ++q) {
-        proj += pt.bvec[q] * theta[q];
-      }
-      r -= proj;
+  std::vector<double> ss_local(static_cast<size_t>(workers), 0.0);
+  parallel_for_range(stencil.size(), workers, [&](size_t begin, size_t end) {
+    size_t tid = begin == end ? 0 : begin / std::max<size_t>(1, (stencil.size() + static_cast<size_t>(workers) - 1) / static_cast<size_t>(workers));
+    if (tid >= static_cast<size_t>(workers)) {
+      tid = static_cast<size_t>(workers - 1);
     }
-    double ar = std::abs(r);
-    double rho = (ar <= huber_k) ? (r * r) : (2.0 * huber_k * ar - huber_k * huber_k);
-    ss += pt.w0 * rho;
+    double ss = 0.0;
+    for (size_t s = begin; s < end; ++s) {
+      const StencilPoint& pt = stencil[s];
+      double r = residual[s];
+      if (solved) {
+        double proj = 0.0;
+        for (int q = 0; q < p; ++q) {
+          proj += pt.bvec[q] * theta[q];
+        }
+        r -= proj;
+      }
+      double ar = std::abs(r);
+      double rho = (ar <= huber_k) ? (r * r) : (2.0 * huber_k * ar - huber_k * huber_k);
+      ss += pt.w0 * rho;
+    }
+    ss_local[tid] = ss;
+  });
+
+  double ss = 0.0;
+  for (int tid = 0; tid < workers; ++tid) {
+    ss += ss_local[static_cast<size_t>(tid)];
   }
 
   double overlap = inb / wsum;
@@ -1448,7 +1559,8 @@ FrameFit optimize_frame_pose_ic(const NumericVector& data,
                                 const double* Linv_u2xi,
                                 bool use_nuisance_marginalization,
                                 int nuisance_dim,
-                                double nuisance_ridge) {
+                                double nuisance_ridge,
+                                int nthreads) {
   bool use_nuisance = use_nuisance_marginalization && nuisance_dim > 0;
   auto eval_pose = [&](const Pose6& pose) {
     if (use_nuisance) {
@@ -1464,10 +1576,11 @@ FrameFit optimize_frame_pose_ic(const NumericVector& data,
                                             huber_k,
                                             use_overlap_taper,
                                             nuisance_dim,
-                                            nuisance_ridge);
+                                            nuisance_ridge,
+                                            nthreads);
     }
     return evaluate_cost_stencil(
-        data, nx, ny, nz, nxyz, t, pixdim, stencil, pose, huber_k, use_overlap_taper);
+        data, nx, ny, nz, nxyz, t, pixdim, stencil, pose, huber_k, use_overlap_taper, nthreads);
   };
 
   std::vector<Pose6> seeds;
@@ -1492,6 +1605,7 @@ FrameFit optimize_frame_pose_ic(const NumericVector& data,
   double best_c_final = best_eval.cost;
   int best_iters = 0;
   bool best_restart = false;
+  int stencil_workers = effective_thread_count(nthreads, stencil.size());
 
   for (size_t seed_idx = 0; seed_idx < seeds.size(); ++seed_idx) {
     Pose6 cur = seeds[seed_idx];
@@ -1508,43 +1622,92 @@ FrameFit optimize_frame_pose_ic(const NumericVector& data,
       double C[30] = {0};      // 6 x max 5 nuisance columns
       double BtB[25] = {0};    // max 5 x 5
       double bt[5] = {0};
-      double src[3];
       double valid_w = 0.0;
+      std::vector<double> H_local(static_cast<size_t>(stencil_workers) * 36, 0.0);
+      std::vector<double> g_local(static_cast<size_t>(stencil_workers) * 6, 0.0);
+      std::vector<double> C_local(static_cast<size_t>(stencil_workers) * 30, 0.0);
+      std::vector<double> BtB_local(static_cast<size_t>(stencil_workers) * 25, 0.0);
+      std::vector<double> bt_local(static_cast<size_t>(stencil_workers) * 5, 0.0);
+      std::vector<double> valid_w_local(static_cast<size_t>(stencil_workers), 0.0);
 
-      for (size_t s = 0; s < stencil.size(); ++s) {
-        const StencilPoint& p = stencil[s];
-        bool in_bounds = false;
-        fixed_to_moving_vox(p.i, p.j, p.k, nx, ny, nz, pixdim, cur, src, &in_bounds);
-        if (!in_bounds) {
-          continue;
+      parallel_for_range(stencil.size(), stencil_workers, [&](size_t begin, size_t end) {
+        size_t tid = begin == end ? 0 : begin / std::max<size_t>(1, (stencil.size() + static_cast<size_t>(stencil_workers) - 1) / static_cast<size_t>(stencil_workers));
+        if (tid >= static_cast<size_t>(stencil_workers)) {
+          tid = static_cast<size_t>(stencil_workers - 1);
         }
+        double* Ht = &H_local[tid * 36];
+        double* gt = &g_local[tid * 6];
+        double* Ct = &C_local[tid * 30];
+        double* BtBt = &BtB_local[tid * 25];
+        double* btt = &bt_local[tid * 5];
+        double valid_w_thread = 0.0;
+        double src[3];
 
-        double mv = sample_trilinear_frame(data, nx, ny, nz, nxyz, t, src[0], src[1], src[2]);
-        double r = mv - p.tval;
-        double ar = std::abs(r);
-        double wr = (ar <= huber_k) ? 1.0 : (huber_k / (ar + 1e-12));
-        double wt = p.w0 * wr;
-        valid_w += wt;
-        const double* jac = use_whiten_modes ? p.jwhite : p.jcol;
+        for (size_t s = begin; s < end; ++s) {
+          const StencilPoint& p = stencil[s];
+          bool in_bounds = false;
+          fixed_to_moving_vox(p.i, p.j, p.k, nx, ny, nz, pixdim, cur, src, &in_bounds);
+          if (!in_bounds) {
+            continue;
+          }
 
-        for (int a = 0; a < 6; ++a) {
-          double ja = jac[a];
-          g[a] += wt * ja * r;
-          for (int b = a; b < 6; ++b) {
-            H[a * 6 + b] += wt * ja * jac[b];
+          double mv = sample_trilinear_frame(data, nx, ny, nz, nxyz, t, src[0], src[1], src[2]);
+          double r = mv - p.tval;
+          double ar = std::abs(r);
+          double wr = (ar <= huber_k) ? 1.0 : (huber_k / (ar + 1e-12));
+          double wt = p.w0 * wr;
+          valid_w_thread += wt;
+          const double* jac = use_whiten_modes ? p.jwhite : p.jcol;
+
+          for (int a = 0; a < 6; ++a) {
+            double ja = jac[a];
+            gt[a] += wt * ja * r;
+            for (int b = a; b < 6; ++b) {
+              Ht[a * 6 + b] += wt * ja * jac[b];
+            }
+            if (use_nuisance) {
+              for (int q = 0; q < nuisance_dim; ++q) {
+                Ct[a * nuisance_dim + q] += wt * ja * p.bvec[q];
+              }
+            }
           }
           if (use_nuisance) {
             for (int q = 0; q < nuisance_dim; ++q) {
-              C[a * nuisance_dim + q] += wt * ja * p.bvec[q];
+              double bq = p.bvec[q];
+              btt[q] += wt * bq * r;
+              for (int qq = q; qq < nuisance_dim; ++qq) {
+                BtBt[q * nuisance_dim + qq] += wt * bq * p.bvec[qq];
+              }
+            }
+          }
+        }
+
+        valid_w_local[tid] = valid_w_thread;
+      });
+
+      for (int tid = 0; tid < stencil_workers; ++tid) {
+        valid_w += valid_w_local[static_cast<size_t>(tid)];
+        const double* Ht = &H_local[static_cast<size_t>(tid) * 36];
+        const double* gt = &g_local[static_cast<size_t>(tid) * 6];
+        const double* Ct = &C_local[static_cast<size_t>(tid) * 30];
+        const double* BtBt = &BtB_local[static_cast<size_t>(tid) * 25];
+        const double* btt = &bt_local[static_cast<size_t>(tid) * 5];
+        for (int a = 0; a < 6; ++a) {
+          g[a] += gt[a];
+          for (int b = a; b < 6; ++b) {
+            H[a * 6 + b] += Ht[a * 6 + b];
+          }
+          if (use_nuisance) {
+            for (int q = 0; q < nuisance_dim; ++q) {
+              C[a * nuisance_dim + q] += Ct[a * nuisance_dim + q];
             }
           }
         }
         if (use_nuisance) {
           for (int q = 0; q < nuisance_dim; ++q) {
-            double bq = p.bvec[q];
-            bt[q] += wt * bq * r;
+            bt[q] += btt[q];
             for (int qq = q; qq < nuisance_dim; ++qq) {
-              BtB[q * nuisance_dim + qq] += wt * bq * p.bvec[qq];
+              BtB[q * nuisance_dim + qq] += BtBt[q * nuisance_dim + qq];
             }
           }
         }
@@ -1912,39 +2075,43 @@ NumericVector build_aligned_trimmed_template(const NumericVector& data,
                                              int nt,
                                              int nxyz,
                                              const NumericVector& pixdim,
-                                             double trim_frac) {
+                                             double trim_frac,
+                                             int nthreads = 1) {
   NumericVector out(nxyz);
-  std::vector<double> vals(nt);
   int trim_n = static_cast<int>(std::floor(trim_frac * nt));
   trim_n = std::max(0, std::min(trim_n, (nt - 1) / 2));
 
-  double src[3];
-  for (int k = 0; k < nz; ++k) {
-    for (int j = 0; j < ny; ++j) {
-      for (int i = 0; i < nx; ++i) {
-        int v = i + nx * (j + ny * k);
+  parallel_for_range(static_cast<size_t>(nxyz), nthreads, [&](size_t begin, size_t end) {
+    std::vector<double> vals(static_cast<size_t>(nt));
+    double src[3];
+    for (size_t vv = begin; vv < end; ++vv) {
+      int v = static_cast<int>(vv);
+      int k = v / (nx * ny);
+      int rem = v - k * nx * ny;
+      int j = rem / nx;
+      int i = rem - j * nx;
 
-        for (int t = 0; t < nt; ++t) {
-          bool in_bounds = false;
-          fixed_to_moving_vox(i, j, k, nx, ny, nz, pixdim, poses[t], src, &in_bounds);
-          if (in_bounds) {
-            vals[t] = sample_trilinear_frame(data, nx, ny, nz, nxyz, t, src[0], src[1], src[2]);
-          } else {
-            vals[t] = 0.0;
-          }
+      for (int t = 0; t < nt; ++t) {
+        bool in_bounds = false;
+        fixed_to_moving_vox(i, j, k, nx, ny, nz, pixdim, poses[static_cast<size_t>(t)], src, &in_bounds);
+        if (in_bounds) {
+          vals[static_cast<size_t>(t)] =
+              sample_trilinear_frame(data, nx, ny, nz, nxyz, t, src[0], src[1], src[2]);
+        } else {
+          vals[static_cast<size_t>(t)] = 0.0;
         }
-
-        std::sort(vals.begin(), vals.end());
-        int lo = trim_n;
-        int hi = nt - trim_n;
-        double s = 0.0;
-        for (int tt = lo; tt < hi; ++tt) {
-          s += vals[tt];
-        }
-        out[v] = s / static_cast<double>(hi - lo);
       }
+
+      std::sort(vals.begin(), vals.end());
+      int lo = trim_n;
+      int hi = nt - trim_n;
+      double s = 0.0;
+      for (int tt = lo; tt < hi; ++tt) {
+        s += vals[static_cast<size_t>(tt)];
+      }
+      out[v] = s / static_cast<double>(hi - lo);
     }
-  }
+  });
 
   out.attr("dim") = IntegerVector::create(nx, ny, nz);
   return out;
@@ -2090,13 +2257,14 @@ List cpp_volreg_estimate(
   int stencil_by = get_int_ctrl(control, "stencil_by", 4);
   int stencil_bz = get_int_ctrl(control, "stencil_bz", 2);
   double stencil_gamma = get_dbl_ctrl(control, "stencil_gamma", 0.5);
+  int nthreads = std::max(1, get_int_ctrl(control, "nthreads", 1));
 
   NumericMatrix par(nt, 6);
   NumericMatrix mats = identity_mats(nt);
 
   bool robust_mean_ref = (ref_mode == "robust_mean") && nt > 1;
   NumericVector template_vol = robust_mean_ref
-                                   ? trimmed_mean_template(data, nx, ny, nz, nt, trim_frac)
+                                   ? trimmed_mean_template(data, nx, ny, nz, nt, trim_frac, nthreads)
                                    : extract_ref_volume(data, nx, ny, nz, ref_index);
 
   LogicalVector fit_mask = build_mask(mask, nxyz);
@@ -2224,7 +2392,8 @@ List cpp_volreg_estimate(
                                       use_whiten_local ? wm.LinvT : nullptr,
                                       use_nuisance_marginalization,
                                       nuisance_dim_local,
-                                      nuisance_ridge);
+                                      nuisance_ridge,
+                                      nthreads);
       }
       return optimize_frame_pose(data,
                                  template_vol,
@@ -2302,8 +2471,8 @@ List cpp_volreg_estimate(
   }
 
   if (template_refresh) {
-    template_vol = build_aligned_trimmed_template(
-        data, poses, nx, ny, nz, nt, nxyz, pixdim, trim_frac);
+        template_vol = build_aligned_trimmed_template(
+            data, poses, nx, ny, nz, nt, nxyz, pixdim, trim_frac, nthreads);
     solve_sequence(poses[ref_t], true);
   }
 

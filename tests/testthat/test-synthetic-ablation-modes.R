@@ -192,3 +192,115 @@ test_that("ablation: packet-aware resampling reduces intra-TR residual mismatch"
 
   expect_true(median(ratios) < 0.90, paste0("median packet/volume mse ratio=", signif(median(ratios), 4)))
 })
+
+test_that("ablation: fast_native stays faster while remaining close on low-motion truth", {
+  seeds <- 1:2
+  elapsed_ratio <- numeric(length(seeds))
+  disp_ratio <- numeric(length(seeds))
+
+  for (ii in seq_along(seeds)) {
+    s <- seeds[ii]
+    subject <- make_continuous_subject(seed = 2200 + s)
+    nt <- 10
+    nx <- 16; ny <- 16; nz <- 8
+    tt <- seq(0, 1, length.out = nt)
+    poses <- cbind(
+      0.9 * sin(2 * pi * tt),
+      0.6 * cos(2 * pi * tt),
+      0.4 * sin(3 * pi * tt),
+      .deg(0.9) * sin(2 * pi * tt),
+      .deg(0.7) * cos(2 * pi * tt),
+      .deg(0.8) * sin(3 * pi * tt)
+    )
+    poses <- sweep(poses, 2, poses[1, ], FUN = "-")
+
+    sim <- simulate_continuous_run(
+      subject = subject,
+      nx = nx,
+      ny = ny,
+      nz = nz,
+      nt = nt,
+      poses = poses,
+      noise_sd = 1.5,
+      drift_amp = 0,
+      bias_amp = 0.02,
+      supersample = 1L,
+      seed = 8200 + s
+    )
+    mask <- continuous_brain_mask(subject, nx, ny, nz, pixdim = sim$pixdim, supersample = 1L)
+    truth <- invert_motion(poses)
+
+    fast_prof <- volreg_profile("fast_native", overrides = list(max_iter = 8L, n_restarts = 1L, nthreads = 1L))
+    robust_prof <- volreg_profile("ic_nuisance", overrides = list(max_iter = 8L, n_restarts = 1L, nthreads = 1L))
+
+    fast_elapsed <- system.time({
+      est_fast <- estimate_motion(sim$run, mask = mask, ref = "robust_mean", engine = fast_prof$engine, control = fast_prof$control)
+    })[["elapsed"]]
+    robust_elapsed <- system.time({
+      est_robust <- estimate_motion(sim$run, mask = mask, ref = "robust_mean", engine = robust_prof$engine, control = robust_prof$control)
+    })[["elapsed"]]
+
+    fast_disp <- motion_displacement_summary(mask, est_fast$mats, truth, pixdim = sim$pixdim)
+    robust_disp <- motion_displacement_summary(mask, est_robust$mats, truth, pixdim = sim$pixdim)
+
+    elapsed_ratio[ii] <- fast_elapsed / robust_elapsed
+    disp_ratio[ii] <- median(fast_disp$disp_p95, na.rm = TRUE) / median(robust_disp$disp_p95, na.rm = TRUE)
+  }
+
+  expect_true(median(elapsed_ratio) < 0.9, paste0("median elapsed ratio=", signif(median(elapsed_ratio), 4)))
+  expect_true(median(disp_ratio) < 1.2, paste0("median disp_p95 ratio=", signif(median(disp_ratio), 4)))
+})
+
+test_that("ablation: nuisance profile wins under strong nuisance contamination", {
+  seeds <- 1:2
+  disp_ratio <- numeric(length(seeds))
+  fd_ratio <- numeric(length(seeds))
+
+  for (ii in seq_along(seeds)) {
+    s <- seeds[ii]
+    subject <- make_continuous_subject(seed = 2400 + s)
+    nt <- 10
+    nx <- 16; ny <- 16; nz <- 8
+    tt <- seq(0, 1, length.out = nt)
+    poses <- cbind(
+      1.6 * sin(2 * pi * tt),
+      1.1 * cos(2 * pi * tt + 0.2),
+      0.8 * sin(3 * pi * tt),
+      .deg(1.8) * sin(2 * pi * tt),
+      .deg(1.5) * cos(2 * pi * tt + 0.3),
+      .deg(1.6) * sin(3 * pi * tt)
+    )
+    poses <- sweep(poses, 2, poses[1, ], FUN = "-")
+
+    sim <- simulate_continuous_run(
+      subject = subject,
+      nx = nx,
+      ny = ny,
+      nz = nz,
+      nt = nt,
+      poses = poses,
+      noise_sd = 2.0,
+      drift_amp = 0.08,
+      bias_amp = 0.12,
+      supersample = 1L,
+      seed = 9100 + s
+    )
+    mask <- continuous_brain_mask(subject, nx, ny, nz, pixdim = sim$pixdim, supersample = 1L)
+    truth <- invert_motion(poses)
+
+    fast_prof <- volreg_profile("fast_native", overrides = list(max_iter = 8L, n_restarts = 1L, nthreads = 1L))
+    robust_prof <- volreg_profile("ic_nuisance", overrides = list(max_iter = 8L, n_restarts = 1L, nthreads = 1L))
+
+    est_fast <- estimate_motion(sim$run, mask = mask, ref = "robust_mean", engine = fast_prof$engine, control = fast_prof$control)
+    est_robust <- estimate_motion(sim$run, mask = mask, ref = "robust_mean", engine = robust_prof$engine, control = robust_prof$control)
+
+    fast_disp <- motion_displacement_summary(mask, est_fast$mats, truth, pixdim = sim$pixdim)
+    robust_disp <- motion_displacement_summary(mask, est_robust$mats, truth, pixdim = sim$pixdim)
+
+    disp_ratio[ii] <- median(robust_disp$disp_p95, na.rm = TRUE) / median(fast_disp$disp_p95, na.rm = TRUE)
+    fd_ratio[ii] <- median(robust_disp$fd_error, na.rm = TRUE) / median(fast_disp$fd_error, na.rm = TRUE)
+  }
+
+  expect_true(median(disp_ratio) < 1.0, paste0("median disp_p95 ratio=", signif(median(disp_ratio), 4)))
+  expect_true(median(fd_ratio) < 1.0, paste0("median fd_error ratio=", signif(median(fd_ratio), 4)))
+})

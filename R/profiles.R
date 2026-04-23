@@ -9,6 +9,7 @@
 volreg_profile <- function(
     name = c(
       "dense_baseline",
+      "fast_native",
       "ic_stencil",
       "ic_whiten",
       "ic_nuisance",
@@ -29,6 +30,19 @@ volreg_profile <- function(
         whiten_modes = FALSE,
         use_nuisance_marginalization = FALSE,
         nuisance_include_template = FALSE
+      )
+    ),
+    fast_native = list(
+      engine = "rigid_robust",
+      components = c("capture_boost", "ic_stencil", "whiten", "fast_native"),
+      control = list(
+        use_ic_stencil = TRUE,
+        whiten_modes = TRUE,
+        use_nuisance_marginalization = FALSE,
+        nuisance_include_template = FALSE,
+        stencil_n = 1000L,
+        capture_topk = 4L,
+        max_iter = c(30L, 20L, 12L)
       )
     ),
     ic_stencil = list(

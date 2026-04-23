@@ -3,12 +3,52 @@
 #include <cmath>
 #include <map>
 #include <set>
+#include <thread>
 using namespace Rcpp;
 
 namespace {
 
 inline int clamp_int(int x, int lo, int hi) {
   return std::max(lo, std::min(hi, x));
+}
+
+inline int effective_thread_count(int requested, size_t work_items) {
+  if (requested <= 1 || work_items <= 1) {
+    return 1;
+  }
+  unsigned int hw = std::thread::hardware_concurrency();
+  int max_threads = hw > 0 ? static_cast<int>(hw) : requested;
+  int out = std::max(1, std::min(requested, max_threads));
+  if (work_items < static_cast<size_t>(2 * out)) {
+    return 1;
+  }
+  return out;
+}
+
+template <typename Fn>
+void parallel_for_range(size_t n, int nthreads, Fn fn) {
+  int workers = effective_thread_count(nthreads, n);
+  if (workers <= 1) {
+    fn(0, n);
+    return;
+  }
+
+  size_t chunk = (n + static_cast<size_t>(workers) - 1) / static_cast<size_t>(workers);
+  std::vector<std::thread> pool;
+  pool.reserve(static_cast<size_t>(workers));
+
+  for (int tid = 0; tid < workers; ++tid) {
+    size_t begin = static_cast<size_t>(tid) * chunk;
+    if (begin >= n) {
+      break;
+    }
+    size_t end = std::min(n, begin + chunk);
+    pool.emplace_back([&, begin, end]() { fn(begin, end); });
+  }
+
+  for (size_t i = 0; i < pool.size(); ++i) {
+    pool[i].join();
+  }
 }
 
 inline void rotation_matrix(double rx, double ry, double rz, double* R) {
@@ -357,9 +397,14 @@ SEXP cpp_volreg_apply(
     }
   }
 
-  for (int t = 0; t < nt; ++t) {
-    size_t off = static_cast<size_t>(nxyz) * t;
-    for (int k = 0; k < nz; ++k) {
+  size_t tasks = static_cast<size_t>(nt) * static_cast<size_t>(nz);
+  parallel_for_range(tasks, nthreads, [&](size_t begin, size_t end) {
+    double src[3];
+    for (size_t task = begin; task < end; ++task) {
+      int t = static_cast<int>(task / static_cast<size_t>(nz));
+      int k = static_cast<int>(task % static_cast<size_t>(nz));
+      size_t off = static_cast<size_t>(nxyz) * static_cast<size_t>(t);
+
       double tx = par(t, 0);
       double ty = par(t, 1);
       double tz = par(t, 2);
@@ -384,7 +429,6 @@ SEXP cpp_volreg_apply(
 
       for (int j = 0; j < ny; ++j) {
         for (int i = 0; i < nx; ++i) {
-          double src[3];
           fixed_to_moving_vox(i, j, k, nx, ny, nz, pixdim, tx, ty, tz, rx, ry, rz, src);
           double v = 0.0;
           if (mode == LINEAR) {
@@ -398,10 +442,7 @@ SEXP cpp_volreg_apply(
         }
       }
     }
-  }
-
-  // Accepted in API but not yet used for threading.
-  (void) nthreads;
+  });
 
   out.attr("dim") = dim;
   return out;
