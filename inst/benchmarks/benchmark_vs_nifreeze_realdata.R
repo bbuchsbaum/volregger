@@ -11,6 +11,9 @@ defaults <- list(
   scenarios = "low_motion,moderate_motion,hard_motion,hard_motion_plus_nuisance",
   nthreads = "1",
   python = Sys.which("python"),
+  nifreeze_backend = "docker",
+  nifreeze_docker_image = "volregger-nifreeze-benchmark:latest",
+  nifreeze_docker_runner = file.path("inst", "benchmarks", "run_nifreeze_realdata_docker.sh"),
   volreg_profile = "ic_nuisance",
   nifreeze_model = "mean",
   seed = "4401"
@@ -90,12 +93,27 @@ probe_nifreeze <- function() {
   if (isTRUE(opts$skip_nifreeze)) {
     return(list(available = FALSE, message = "Skipped by user request"))
   }
-  probe <- run_profiled_command(
-    command = opts$python,
-    args = c("inst/benchmarks/run_nifreeze_realdata.py", "--probe"),
-    stdout_path = file.path(out_dir, "nifreeze_probe_stdout.txt"),
-    stderr_path = file.path(out_dir, "nifreeze_probe_stderr.txt")
-  )
+  if (identical(opts$nifreeze_backend, "docker")) {
+    probe <- run_profiled_command(
+      command = "bash",
+      args = c(
+        opts$nifreeze_docker_runner,
+        "--image", opts$nifreeze_docker_image,
+        "--probe"
+      ),
+      stdout_path = file.path(out_dir, "nifreeze_probe_stdout.txt"),
+      stderr_path = file.path(out_dir, "nifreeze_probe_stderr.txt")
+    )
+  } else if (identical(opts$nifreeze_backend, "local")) {
+    probe <- run_profiled_command(
+      command = opts$python,
+      args = c("inst/benchmarks/run_nifreeze_realdata.py", "--probe"),
+      stdout_path = file.path(out_dir, "nifreeze_probe_stdout.txt"),
+      stderr_path = file.path(out_dir, "nifreeze_probe_stderr.txt")
+    )
+  } else {
+    stop("Unknown nifreeze backend: ", opts$nifreeze_backend, call. = FALSE)
+  }
   stdout_lines <- if (file.exists(file.path(out_dir, "nifreeze_probe_stdout.txt"))) {
     readLines(file.path(out_dir, "nifreeze_probe_stdout.txt"), warn = FALSE)
   } else {
@@ -196,23 +214,43 @@ run_one <- function(method, scenario_name) {
       ))
     }
 
-    prof <- run_profiled_command(
-      command = opts$python,
-      args = c(
-        "inst/benchmarks/run_nifreeze_realdata.py",
-        "--input", input_path,
-        "--mask", mask_path,
-        "--out-dir", method_dir,
-        "--model", opts$nifreeze_model,
-        "--nthreads", opts$nthreads,
-        "--seed", opts$seed
-      ),
-      stdout_path = stdout_path,
-      stderr_path = stderr_path
-    )
+    if (identical(opts$nifreeze_backend, "docker")) {
+      prof <- run_profiled_command(
+        command = "bash",
+        args = c(
+          opts$nifreeze_docker_runner,
+          "--image", opts$nifreeze_docker_image,
+          "--input", input_path,
+          "--mask", mask_path,
+          "--out-dir", method_dir,
+          "--model", opts$nifreeze_model,
+          "--nthreads", opts$nthreads,
+          "--seed", opts$seed
+        ),
+        stdout_path = stdout_path,
+        stderr_path = stderr_path
+      )
+    } else if (identical(opts$nifreeze_backend, "local")) {
+      prof <- run_profiled_command(
+        command = opts$python,
+        args = c(
+          "inst/benchmarks/run_nifreeze_realdata.py",
+          "--input", input_path,
+          "--mask", mask_path,
+          "--out-dir", method_dir,
+          "--model", opts$nifreeze_model,
+          "--nthreads", opts$nthreads,
+          "--seed", opts$seed
+        ),
+        stdout_path = stdout_path,
+        stderr_path = stderr_path
+      )
+    } else {
+      stop("Unknown nifreeze backend: ", opts$nifreeze_backend, call. = FALSE)
+    }
     meta <- data.frame(
       method = method,
-      method_model = opts$nifreeze_model,
+      method_model = paste(opts$nifreeze_backend, opts$nifreeze_model, sep = ":"),
       stringsAsFactors = FALSE
     )
   }
