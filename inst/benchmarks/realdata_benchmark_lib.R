@@ -411,6 +411,108 @@ compute_benchmark_metrics <- function(input_run, corrected, mask, motion_mats, t
   as.data.frame(out, stringsAsFactors = FALSE)
 }
 
+mask_world_coords <- function(mask, pixdim) {
+  mask <- as.array(mask)
+  storage.mode(mask) <- "logical"
+  ijk <- which(mask, arr.ind = TRUE)
+  if (!nrow(ijk)) {
+    stop("mask contains no TRUE voxels", call. = FALSE)
+  }
+  dim3 <- dim(mask)
+  center <- 0.5 * (dim3 - 1)
+  cbind(
+    (ijk[, 1] - 1 - center[1]) * pixdim[1],
+    (ijk[, 2] - 1 - center[2]) * pixdim[2],
+    (ijk[, 3] - 1 - center[3]) * pixdim[3]
+  )
+}
+
+apply_motion_coords <- function(mat, coords) {
+  sweep(coords %*% t(mat[1:3, 1:3, drop = FALSE]), 2L, mat[1:3, 4], FUN = "+")
+}
+
+framewise_disp_from_transform <- function(motion, radius = 50) {
+  mats <- motion_matrices(motion)
+  nt <- dim(mats)[3]
+  if (nt <= 1L) {
+    return(rep(0, nt))
+  }
+  out <- numeric(nt)
+  out[1] <- 0
+  out[-1] <- fd_from_transform(
+    mats[, , 2:nt, drop = FALSE],
+    radius = radius,
+    reference = mats[, , 1:(nt - 1L), drop = FALSE]
+  )
+  out
+}
+
+pairwise_solution_comparison <- function(
+    mask,
+    motion_a,
+    motion_b,
+    pixdim,
+    ref_index = 1L,
+    corrected_a = NULL,
+    corrected_b = NULL,
+    radius = 50) {
+  mats_a <- motion_matrices(motion_a)
+  mats_b <- motion_matrices(motion_b)
+  nt <- dim(mats_a)[3]
+  if (dim(mats_b)[3] != nt) {
+    stop("motion_a and motion_b must have same frame count", call. = FALSE)
+  }
+  if (ref_index < 1L || ref_index > nt) {
+    stop("ref_index out of range", call. = FALSE)
+  }
+
+  coords <- mask_world_coords(mask, pixdim = pixdim)
+  ref_a <- apply_motion_coords(mats_a[, , ref_index], coords)
+  ref_b <- apply_motion_coords(mats_b[, , ref_index], coords)
+
+  frames <- vector("list", nt)
+  for (t in seq_len(nt)) {
+    rel_a <- apply_motion_coords(mats_a[, , t], coords) - ref_a
+    rel_b <- apply_motion_coords(mats_b[, , t], coords) - ref_b
+    disp <- sqrt(rowSums((rel_a - rel_b)^2))
+    frames[[t]] <- data.frame(
+      frame = t,
+      rel_disp_median = stats::median(disp, na.rm = TRUE),
+      rel_disp_p95 = unname(stats::quantile(disp, probs = 0.95, na.rm = TRUE)),
+      rel_disp_max = max(disp, na.rm = TRUE),
+      stringsAsFactors = FALSE
+    )
+  }
+  frames <- do.call(rbind, frames)
+
+  fd_a <- framewise_disp_from_transform(mats_a, radius = radius)
+  fd_b <- framewise_disp_from_transform(mats_b, radius = radius)
+  frames$fd_step_a <- fd_a
+  frames$fd_step_b <- fd_b
+  frames$fd_step_absdiff <- abs(fd_a - fd_b)
+
+  summary <- data.frame(
+    anchor_frame = ref_index,
+    rel_disp_median = stats::median(frames$rel_disp_median, na.rm = TRUE),
+    rel_disp_p95 = stats::median(frames$rel_disp_p95, na.rm = TRUE),
+    rel_disp_max = stats::median(frames$rel_disp_max, na.rm = TRUE),
+    fd_step_mean_absdiff = mean(frames$fd_step_absdiff, na.rm = TRUE),
+    fd_step_p95_absdiff = unname(stats::quantile(frames$fd_step_absdiff, probs = 0.95, na.rm = TRUE)),
+    fd_step_corr = if (sum(is.finite(fd_a) & is.finite(fd_b)) >= 3L) stats::cor(fd_a, fd_b) else NA_real_,
+    stringsAsFactors = FALSE
+  )
+
+  if (!is.null(corrected_a) && !is.null(corrected_b)) {
+    summary$corrected_corr <- masked_frame_correlation(corrected_a, corrected_b, mask)
+    summary$corrected_mse <- masked_frame_mse(corrected_a, corrected_b, mask)
+  } else {
+    summary$corrected_corr <- NA_real_
+    summary$corrected_mse <- NA_real_
+  }
+
+  list(summary = summary, frames = frames)
+}
+
 dir_size_bytes <- function(path) {
   files <- list.files(path, recursive = TRUE, full.names = TRUE, all.files = TRUE, no.. = TRUE)
   files <- files[file.info(files)$isdir %in% FALSE]

@@ -24,7 +24,7 @@ defaults <- list(
 opts <- parse_benchmark_args(
   commandArgs(trailingOnly = TRUE),
   defaults = defaults,
-  flags = c("skip_nifreeze", "skip_afni")
+  flags = c("skip_nifreeze", "skip_afni", "native_only")
 )
 
 input_path <- opts$input %||% default_realdata_input()
@@ -32,10 +32,7 @@ out_dir <- opts$out_dir
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
 native_loaded <- load_bold_nifti(input_path, max_frames = opts$native_frames)
-truth_loaded <- load_bold_nifti(input_path, max_frames = opts$truth_frames)
-
 native_mask <- derive_brain_mask(native_loaded$data)
-truth_mask <- derive_brain_mask(truth_loaded$data)
 
 native_dir <- file.path(out_dir, "scenarios", "native")
 dir.create(native_dir, recursive = TRUE, showWarnings = FALSE)
@@ -47,6 +44,10 @@ native_base_index <- select_reference_frame(native_loaded$data, native_mask) - 1
 
 scenario_names <- strsplit(opts$scenarios, ",", fixed = TRUE)[[1]]
 scenario_names <- trimws(scenario_names)
+scenario_names <- scenario_names[nzchar(scenario_names)]
+if (isTRUE(opts$native_only)) {
+  scenario_names <- character()
+}
 
 scenario_objects <- vector("list", length(scenario_names))
 names(scenario_objects) <- scenario_names
@@ -62,32 +63,39 @@ manifest_rows <- list(
   )
 )
 
-for (name in scenario_names) {
-  sc <- make_truth_scenario(truth_loaded$data, truth_mask, name, truth_frames = dim(truth_loaded$data)[4])
-  scenario_dir <- file.path(out_dir, "scenarios", name)
-  dir.create(scenario_dir, recursive = TRUE, showWarnings = FALSE)
-  input_file <- file.path(scenario_dir, "input.nii.gz")
-  clean_file <- file.path(scenario_dir, "clean.nii.gz")
-  mask_file <- file.path(scenario_dir, "mask.nii.gz")
-  truth_pose_file <- file.path(scenario_dir, "truth_pose.csv")
-  truth_mats_file <- file.path(scenario_dir, "truth_mats.csv")
+truth_loaded <- NULL
+truth_mask <- NULL
+if (length(scenario_names)) {
+  truth_loaded <- load_bold_nifti(input_path, max_frames = opts$truth_frames)
+  truth_mask <- derive_brain_mask(truth_loaded$data)
 
-  write_bold_nifti(sc$input, input_file, truth_loaded$template)
-  write_bold_nifti(sc$clean, clean_file, truth_loaded$template)
-  write_mask_nifti(truth_mask, mask_file, truth_loaded$template)
-  write_pose_csv(sc$truth_pose, truth_pose_file)
-  write_motion_matrix_csv(sc$truth_mats, truth_mats_file)
+  for (name in scenario_names) {
+    sc <- make_truth_scenario(truth_loaded$data, truth_mask, name, truth_frames = dim(truth_loaded$data)[4])
+    scenario_dir <- file.path(out_dir, "scenarios", name)
+    dir.create(scenario_dir, recursive = TRUE, showWarnings = FALSE)
+    input_file <- file.path(scenario_dir, "input.nii.gz")
+    clean_file <- file.path(scenario_dir, "clean.nii.gz")
+    mask_file <- file.path(scenario_dir, "mask.nii.gz")
+    truth_pose_file <- file.path(scenario_dir, "truth_pose.csv")
+    truth_mats_file <- file.path(scenario_dir, "truth_mats.csv")
 
-  scenario_objects[[name]] <- c(sc, list(input_path = input_file, clean_path = clean_file, mask_path = mask_file))
-  manifest_rows[[length(manifest_rows) + 1L]] <- data.frame(
-    scenario = name,
-    dataset_mode = "truth_injected",
-    nt = dim(sc$input)[4],
-    drift_amp = sc$drift_amp,
-    bias_amp = sc$bias_amp,
-    reference_index = sc$reference_index,
-    stringsAsFactors = FALSE
-  )
+    write_bold_nifti(sc$input, input_file, truth_loaded$template)
+    write_bold_nifti(sc$clean, clean_file, truth_loaded$template)
+    write_mask_nifti(truth_mask, mask_file, truth_loaded$template)
+    write_pose_csv(sc$truth_pose, truth_pose_file)
+    write_motion_matrix_csv(sc$truth_mats, truth_mats_file)
+
+    scenario_objects[[name]] <- c(sc, list(input_path = input_file, clean_path = clean_file, mask_path = mask_file))
+    manifest_rows[[length(manifest_rows) + 1L]] <- data.frame(
+      scenario = name,
+      dataset_mode = "truth_injected",
+      nt = dim(sc$input)[4],
+      drift_amp = sc$drift_amp,
+      bias_amp = sc$bias_amp,
+      reference_index = sc$reference_index,
+      stringsAsFactors = FALSE
+    )
+  }
 }
 
 manifest <- do.call(rbind, manifest_rows)
@@ -457,8 +465,77 @@ paired <- if (length(paired)) do.call(rbind, paired) else data.frame()
 paired_csv <- file.path(out_dir, "benchmark_vs_nifreeze_realdata_paired.csv")
 utils::write.csv(paired, paired_csv, row.names = FALSE)
 
+solution_rows <- list()
+solution_frames <- list()
+sol_idx <- 1L
+frame_idx <- 1L
+for (sc in unique(raw$scenario)) {
+  ok_rows <- raw[raw$scenario == sc & raw$status == "ok", ]
+  if (nrow(ok_rows) < 2L) {
+    next
+  }
+  scenario_mask <- if (identical(sc, "native")) native_mask else truth_mask
+  pixdim <- if (identical(sc, "native")) attr(native_loaded$data, "pixdim") else attr(truth_loaded$data, "pixdim")
+  ref_index <- if (identical(sc, "native")) (native_base_index + 1L) else scenario_objects[[sc]]$reference_index
+
+  for (i in seq_len(nrow(ok_rows) - 1L)) {
+    for (j in (i + 1L):nrow(ok_rows)) {
+      method_a <- ok_rows$method[i]
+      method_b <- ok_rows$method[j]
+      dir_a <- file.path(out_dir, "runs", sc, method_a)
+      dir_b <- file.path(out_dir, "runs", sc, method_b)
+      mats_a <- read_motion_matrix_csv(file.path(dir_a, "motion_mats.csv"))
+      mats_b <- read_motion_matrix_csv(file.path(dir_b, "motion_mats.csv"))
+      corrected_a <- as.array(RNifti::readNifti(file.path(dir_a, "corrected.nii.gz")))
+      corrected_b <- as.array(RNifti::readNifti(file.path(dir_b, "corrected.nii.gz")))
+      storage.mode(corrected_a) <- "double"
+      storage.mode(corrected_b) <- "double"
+
+      cmp <- pairwise_solution_comparison(
+        mask = scenario_mask,
+        motion_a = mats_a,
+        motion_b = mats_b,
+        pixdim = pixdim,
+        ref_index = ref_index,
+        corrected_a = corrected_a,
+        corrected_b = corrected_b
+      )
+      solution_rows[[sol_idx]] <- cbind(
+        data.frame(
+          scenario = sc,
+          dataset_mode = ok_rows$dataset_mode[i],
+          method_a = method_a,
+          method_b = method_b,
+          stringsAsFactors = FALSE
+        ),
+        cmp$summary
+      )
+      solution_frames[[frame_idx]] <- cbind(
+        data.frame(
+          scenario = sc,
+          dataset_mode = ok_rows$dataset_mode[i],
+          method_a = method_a,
+          method_b = method_b,
+          stringsAsFactors = FALSE
+        ),
+        cmp$frames
+      )
+      sol_idx <- sol_idx + 1L
+      frame_idx <- frame_idx + 1L
+    }
+  }
+}
+solution_summary <- if (length(solution_rows)) do.call(rbind, solution_rows) else data.frame()
+solution_frames <- if (length(solution_frames)) do.call(rbind, solution_frames) else data.frame()
+solution_summary_csv <- file.path(out_dir, "benchmark_vs_nifreeze_realdata_solution_summary.csv")
+solution_frames_csv <- file.path(out_dir, "benchmark_vs_nifreeze_realdata_solution_frames.csv")
+utils::write.csv(solution_summary, solution_summary_csv, row.names = FALSE)
+utils::write.csv(solution_frames, solution_frames_csv, row.names = FALSE)
+
 cat("Saved:\n")
 cat(" -", raw_csv, "\n")
 cat(" -", paired_csv, "\n")
+cat(" -", solution_summary_csv, "\n")
+cat(" -", solution_frames_csv, "\n")
 cat(" -", file.path(out_dir, "scenario_manifest.csv"), "\n\n")
 print(raw[, c("method", "dataset_mode", "scenario", "status", "elapsed_sec", "disp_p95", "fd_error", "tsnr_ratio", "blur_proxy_ratio")])
