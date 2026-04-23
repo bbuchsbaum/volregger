@@ -93,4 +93,15 @@ test_that("external truth benchmark keeps volregger ahead of nifreeze on low-mot
   expect_match(vol$method_model, "^ic_nuisance:")
   expect_lt(vol$disp_p95, nif$disp_p95)
   expect_lt(vol$fd_error, nif$fd_error)
+
+  scorecard_path <- file.path(out_dir, "benchmark_vs_nifreeze_realdata_scorecard.csv")
+  skip_if_not(file.exists(scorecard_path))
+  scorecard <- utils::read.csv(scorecard_path, check.names = FALSE)
+  high_value <- scorecard[
+    scorecard$scenario == "low_motion" &
+      scorecard$baseline == "nifreeze" &
+      scorecard$family %in% c("truth_displacement", "truth_matrix"),
+  ]
+  expect_gt(nrow(high_value), 0)
+  expect_false(any(high_value$comparison == "loss", na.rm = TRUE))
 })

@@ -125,3 +125,48 @@ test_that("real-data benchmark truth metrics expose a broad scorecard", {
   expect_equal(metrics$temporal_corr_to_truth, 1, tolerance = 1e-12)
   expect_equal(metrics$edge_ratio_to_truth, 1, tolerance = 1e-12)
 })
+
+test_that("real-data benchmark scorecard ranks truth metrics by direction", {
+  env <- new.env(parent = globalenv())
+  source(testthat::test_path("..", "..", "inst", "benchmarks", "realdata_benchmark_lib.R"), local = env)
+
+  metric_names <- env$benchmark_metric_names()
+  make_row <- function(method, elapsed_sec, disp_p95, corr_to_truth, edge_ratio_to_truth) {
+    metric_vals <- stats::setNames(rep(NA_real_, length(metric_names)), metric_names)
+    metric_vals[["disp_p95"]] <- disp_p95
+    metric_vals[["corr_to_truth"]] <- corr_to_truth
+    metric_vals[["edge_ratio_to_truth"]] <- edge_ratio_to_truth
+    cbind(
+      data.frame(
+        method = method,
+        dataset_mode = "truth_injected",
+        scenario = "low_motion",
+        method_model = method,
+        elapsed_sec = elapsed_sec,
+        estimate_sec = elapsed_sec,
+        apply_sec = NA_real_,
+        report_sec = 0,
+        peak_rss_mb = NA_real_,
+        temp_bytes_written = NA_real_,
+        status = "ok",
+        error = NA_character_,
+        stringsAsFactors = FALSE
+      ),
+      as.data.frame(as.list(metric_vals), stringsAsFactors = FALSE)
+    )
+  }
+
+  raw <- rbind(
+    make_row("volregger", elapsed_sec = 2, disp_p95 = 0.5, corr_to_truth = 0.99, edge_ratio_to_truth = 1.02),
+    make_row("nifreeze", elapsed_sec = 4, disp_p95 = 1.5, corr_to_truth = 0.95, edge_ratio_to_truth = 0.70)
+  )
+  scorecard <- env$make_benchmark_scorecard(raw)
+  summary <- env$summarize_benchmark_scorecard(scorecard)
+
+  expect_true(all(c("elapsed_sec", "disp_p95", "corr_to_truth", "edge_ratio_to_truth") %in% scorecard$metric))
+  expect_identical(scorecard$comparison[scorecard$metric == "disp_p95"], "win")
+  expect_identical(scorecard$comparison[scorecard$metric == "corr_to_truth"], "win")
+  expect_identical(scorecard$comparison[scorecard$metric == "edge_ratio_to_truth"], "win")
+  expect_gt(sum(summary$wins), 0)
+  expect_equal(sum(summary$losses), 0)
+})

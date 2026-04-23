@@ -398,6 +398,13 @@ raw <- do.call(rbind, rows)
 raw_csv <- file.path(out_dir, "benchmark_vs_nifreeze_realdata_raw.csv")
 utils::write.csv(raw, raw_csv, row.names = FALSE)
 
+scorecard <- make_benchmark_scorecard(raw)
+scorecard_summary <- summarize_benchmark_scorecard(scorecard)
+scorecard_csv <- file.path(out_dir, "benchmark_vs_nifreeze_realdata_scorecard.csv")
+scorecard_summary_csv <- file.path(out_dir, "benchmark_vs_nifreeze_realdata_scorecard_summary.csv")
+utils::write.csv(scorecard, scorecard_csv, row.names = FALSE)
+utils::write.csv(scorecard_summary, scorecard_summary_csv, row.names = FALSE)
+
 safe_ratio <- function(x, y) {
   if (!is.finite(x) || !is.finite(y)) {
     return(NA_real_)
@@ -534,6 +541,8 @@ utils::write.csv(solution_frames, solution_frames_csv, row.names = FALSE)
 
 cat("Saved:\n")
 cat(" -", raw_csv, "\n")
+cat(" -", scorecard_csv, "\n")
+cat(" -", scorecard_summary_csv, "\n")
 cat(" -", paired_csv, "\n")
 cat(" -", solution_summary_csv, "\n")
 cat(" -", solution_frames_csv, "\n")
@@ -557,3 +566,8 @@ print(raw[, c(
   "tsnr_ratio",
   "blur_proxy_ratio"
 )])
+
+if (nrow(scorecard_summary)) {
+  cat("\nScorecard summary:\n")
+  print(scorecard_summary)
+}

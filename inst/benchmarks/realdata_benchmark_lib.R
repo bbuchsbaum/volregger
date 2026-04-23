@@ -499,6 +499,184 @@ empty_benchmark_metrics <- function() {
   as.data.frame(as.list(vals), stringsAsFactors = FALSE)
 }
 
+benchmark_scorecard_specs <- function() {
+  data.frame(
+    metric = c(
+      "elapsed_sec",
+      "estimate_sec",
+      "temp_bytes_written",
+      "disp_median",
+      "disp_p95",
+      "disp_max",
+      "fd_error",
+      "trans_rmse",
+      "rot_rmse",
+      "trans_abs_median",
+      "trans_abs_p95",
+      "tx_mae",
+      "ty_mae",
+      "tz_mae",
+      "rot_abs_deg_median",
+      "rot_abs_deg_p95",
+      "rx_mae_deg",
+      "ry_mae_deg",
+      "rz_mae_deg",
+      "rel_frob_median",
+      "rel_frob_p95",
+      "rel_rot_deg_median",
+      "rel_rot_deg_p95",
+      "affine_det_error_max",
+      "mse_to_truth",
+      "mae_to_truth",
+      "nrmse_to_truth",
+      "residual_dvars_to_truth",
+      "dvars_after_mean",
+      "dvars_after_p95",
+      "dvars_ratio",
+      "corr_to_truth",
+      "temporal_corr_to_truth",
+      "tsnr_ratio",
+      "edge_ratio_to_truth"
+    ),
+    direction = c(
+      rep("lower", 31),
+      rep("higher", 3),
+      "target"
+    ),
+    target = c(rep(NA_real_, 34), 1),
+    family = c(
+      rep("runtime", 3),
+      rep("truth_displacement", 4),
+      rep("truth_pose", 12),
+      rep("truth_matrix", 5),
+      rep("truth_image", 4),
+      rep("qc", 3),
+      rep("truth_image", 2),
+      "qc",
+      "truth_image"
+    ),
+    stringsAsFactors = FALSE
+  )
+}
+
+scorecard_metric_result <- function(primary, baseline, direction, target = NA_real_, tolerance = 1e-8) {
+  if (!is.finite(primary) || !is.finite(baseline)) {
+    return(list(
+      primary_margin = NA_real_,
+      primary_ratio = NA_real_,
+      primary_wins = NA,
+      comparison = "unavailable"
+    ))
+  }
+
+  if (identical(direction, "lower")) {
+    margin <- baseline - primary
+    ratio <- primary / max(abs(baseline), tolerance)
+    wins <- primary < baseline - tolerance
+  } else if (identical(direction, "higher")) {
+    margin <- primary - baseline
+    ratio <- primary / max(abs(baseline), tolerance)
+    wins <- primary > baseline + tolerance
+  } else if (identical(direction, "target")) {
+    primary_error <- abs(primary - target)
+    baseline_error <- abs(baseline - target)
+    margin <- baseline_error - primary_error
+    ratio <- primary_error / max(baseline_error, tolerance)
+    wins <- primary_error < baseline_error - tolerance
+  } else {
+    stop("Unknown scorecard direction: ", direction, call. = FALSE)
+  }
+
+  list(
+    primary_margin = margin,
+    primary_ratio = ratio,
+    primary_wins = wins,
+    comparison = if (isTRUE(wins)) "win" else if (abs(margin) <= tolerance) "tie" else "loss"
+  )
+}
+
+make_benchmark_scorecard <- function(raw, primary_method = "volregger", truth_only = TRUE) {
+  specs <- benchmark_scorecard_specs()
+  if (isTRUE(truth_only)) {
+    raw <- raw[raw$dataset_mode == "truth_injected", , drop = FALSE]
+  }
+  scenarios <- unique(raw$scenario)
+  rows <- list()
+  row_idx <- 1L
+
+  for (scenario_name in scenarios) {
+    primary <- raw[raw$scenario == scenario_name & raw$method == primary_method & raw$status == "ok", , drop = FALSE]
+    if (nrow(primary) != 1L) {
+      next
+    }
+    baselines <- raw[raw$scenario == scenario_name & raw$method != primary_method & raw$status == "ok", , drop = FALSE]
+    if (!nrow(baselines)) {
+      next
+    }
+
+    for (baseline_idx in seq_len(nrow(baselines))) {
+      baseline <- baselines[baseline_idx, , drop = FALSE]
+      for (spec_idx in seq_len(nrow(specs))) {
+        metric <- specs$metric[spec_idx]
+        if (!metric %in% names(raw)) {
+          next
+        }
+        result <- scorecard_metric_result(
+          primary = primary[[metric]],
+          baseline = baseline[[metric]],
+          direction = specs$direction[spec_idx],
+          target = specs$target[spec_idx]
+        )
+        rows[[row_idx]] <- data.frame(
+          scenario = scenario_name,
+          dataset_mode = primary$dataset_mode,
+          baseline = baseline$method,
+          metric = metric,
+          family = specs$family[spec_idx],
+          direction = specs$direction[spec_idx],
+          target = specs$target[spec_idx],
+          primary_value = primary[[metric]],
+          baseline_value = baseline[[metric]],
+          primary_margin = result$primary_margin,
+          primary_ratio = result$primary_ratio,
+          primary_wins = result$primary_wins,
+          comparison = result$comparison,
+          stringsAsFactors = FALSE
+        )
+        row_idx <- row_idx + 1L
+      }
+    }
+  }
+
+  if (length(rows)) {
+    do.call(rbind, rows)
+  } else {
+    data.frame()
+  }
+}
+
+summarize_benchmark_scorecard <- function(scorecard) {
+  if (!nrow(scorecard)) {
+    return(data.frame())
+  }
+  aggregate(
+    x = list(
+      metrics_available = scorecard$comparison != "unavailable",
+      wins = scorecard$comparison == "win",
+      losses = scorecard$comparison == "loss",
+      ties = scorecard$comparison == "tie"
+    ),
+    by = list(
+      scenario = scorecard$scenario,
+      dataset_mode = scorecard$dataset_mode,
+      baseline = scorecard$baseline,
+      family = scorecard$family
+    ),
+    FUN = sum,
+    na.rm = TRUE
+  )
+}
+
 compute_benchmark_metrics <- function(input_run, corrected, mask, motion_mats, truth = NULL, clean = NULL) {
   fd <- fd_from_transform(motion_mats)
   dvars_before <- dvars(input_run, robust = FALSE)
