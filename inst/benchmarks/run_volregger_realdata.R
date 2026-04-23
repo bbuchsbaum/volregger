@@ -8,6 +8,7 @@ defaults <- list(
   mask = NULL,
   out_dir = NULL,
   profile = "ic_nuisance",
+  ref = "robust_mean",
   nthreads = "1"
 )
 opts <- parse_benchmark_args(commandArgs(trailingOnly = TRUE), defaults = defaults)
@@ -38,6 +39,7 @@ profile <- volreg_profile(
 fit <- volreg(
   x = x,
   mask = mask,
+  ref = opts$ref,
   engine = profile$engine,
   control = profile$control,
   resample = TRUE,
@@ -54,6 +56,7 @@ write.csv(
   data.frame(
     method = "volregger",
     profile = profile$name,
+    ref = opts$ref,
     engine = profile$engine,
     components = paste(profile$components, collapse = "+"),
     stringsAsFactors = FALSE

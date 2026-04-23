@@ -48,6 +48,29 @@ test_that("estimate_motion detects known translation perturbation", {
   expect_true(any(est$cost_final[c(1, 3)] < est$cost_init[c(1, 3)]))
 })
 
+test_that("robust_mean reference anchors to the consensus frame", {
+  x0 <- array(0, dim = c(9, 9, 5))
+  x0[5, 5, 3] <- 5
+  x0[4, 5, 3] <- 2
+  x0[6, 5, 3] <- 1
+
+  x <- array(0, dim = c(9, 9, 5, 3))
+  x[, , , 1] <- x0
+  x[, , , 2] <- x0
+  x[, , , 3] <- x0
+
+  x[2:9, , , 2] <- x0[1:8, , ]
+
+  ctl <- utils::modifyList(volreg_control(), list(max_iter = 8L, n_samples = 2000L))
+  est_mid <- estimate_motion(x, ref = "middle", control = ctl)
+  est_rob <- estimate_motion(x, ref = "robust_mean", control = ctl)
+
+  expect_true(abs(est_mid$par[2, 1]) < 0.3)
+  expect_true(abs(est_rob$par[2, 1]) > 0.3)
+  expect_true(abs(est_rob$par[2, 1]) > max(abs(est_rob$par[c(1, 3), 1])))
+  expect_true(mean(abs(est_rob$par[c(1, 3), 1])) < mean(abs(est_mid$par[c(1, 3), 1])))
+})
+
 test_that("apply_motion applies translation components", {
   x <- array(0, dim = c(7, 7, 3, 1))
   x[4, 4, 2, 1] <- 1

@@ -15,6 +15,7 @@ defaults <- list(
   nifreeze_docker_image = "volregger-nifreeze-benchmark:latest",
   nifreeze_docker_runner = file.path("inst", "benchmarks", "run_nifreeze_realdata_docker.sh"),
   volreg_profile = "ic_nuisance",
+  volreg_ref = "robust_mean",
   nifreeze_model = "mean",
   seed = "4401"
 )
@@ -166,6 +167,7 @@ run_one <- function(method, scenario_name) {
         "--mask", mask_path,
         "--out-dir", method_dir,
         "--profile", opts$volreg_profile,
+        "--ref", opts$volreg_ref,
         "--nthreads", opts$nthreads
       ),
       stdout_path = stdout_path,
@@ -173,7 +175,7 @@ run_one <- function(method, scenario_name) {
     )
     meta <- data.frame(
       method = method,
-      method_model = opts$volreg_profile,
+      method_model = paste(opts$volreg_profile, opts$volreg_ref, sep = ":"),
       stringsAsFactors = FALSE
     )
   } else {

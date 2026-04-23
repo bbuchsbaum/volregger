@@ -1,6 +1,7 @@
 #include <Rcpp.h>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <vector>
 
 using namespace Rcpp;
@@ -126,6 +127,20 @@ double quantile_inplace(std::vector<double>& x, double q) {
   return x[k];
 }
 
+std::string get_str_ctrl(const List& control,
+                         const std::string& name,
+                         const std::string& default_value) {
+  if (!control.containsElementNamed(name.c_str())) {
+    return default_value;
+  }
+  SEXP v = control[name];
+  if (TYPEOF(v) == STRSXP && Rf_length(v) > 0) {
+    CharacterVector cv(v);
+    return as<std::string>(cv[cv.size() - 1]);
+  }
+  return default_value;
+}
+
 LogicalVector build_mask(const Nullable<LogicalVector>& mask, int nxyz) {
   if (mask.isNotNull()) {
     LogicalVector m(mask);
@@ -135,6 +150,75 @@ LogicalVector build_mask(const Nullable<LogicalVector>& mask, int nxyz) {
     return m;
   }
   return LogicalVector(nxyz, true);
+}
+
+int select_reference_frame_from_template(const NumericVector& data,
+                                         const NumericVector& tmpl,
+                                         int nt,
+                                         int nxyz,
+                                         const LogicalVector& mask) {
+  double sum_t = 0.0;
+  double sum_t2 = 0.0;
+  int nmask = 0;
+  for (int v = 0; v < nxyz; ++v) {
+    if (!mask[v]) {
+      continue;
+    }
+    double tv = tmpl[v];
+    if (!R_finite(tv)) {
+      continue;
+    }
+    sum_t += tv;
+    sum_t2 += tv * tv;
+    ++nmask;
+  }
+  if (nmask == 0) {
+    return std::max(0, (nt - 1) / 2);
+  }
+
+  double mean_t = sum_t / static_cast<double>(nmask);
+  double var_t = std::max(1e-12, sum_t2 / static_cast<double>(nmask) - mean_t * mean_t);
+
+  int best_t = 0;
+  double best_score = -std::numeric_limits<double>::infinity();
+
+  for (int t = 0; t < nt; ++t) {
+    double sum_x = 0.0;
+    double sum_x2 = 0.0;
+    double sum_tx = 0.0;
+    int n = 0;
+    size_t offset = static_cast<size_t>(nxyz) * static_cast<size_t>(t);
+    for (int v = 0; v < nxyz; ++v) {
+      if (!mask[v]) {
+        continue;
+      }
+      double tv = tmpl[v];
+      double xv = data[offset + static_cast<size_t>(v)];
+      if (!R_finite(tv) || !R_finite(xv)) {
+        continue;
+      }
+      sum_x += xv;
+      sum_x2 += xv * xv;
+      sum_tx += tv * xv;
+      ++n;
+    }
+    if (n == 0) {
+      continue;
+    }
+    double mean_x = sum_x / static_cast<double>(n);
+    double var_x = sum_x2 / static_cast<double>(n) - mean_x * mean_x;
+    if (var_x <= 1e-12) {
+      continue;
+    }
+    double cov = sum_tx / static_cast<double>(n) - mean_t * mean_x;
+    double corr = cov / std::sqrt(var_t * var_x);
+    if (corr > best_score) {
+      best_score = corr;
+      best_t = t;
+    }
+  }
+
+  return best_t;
 }
 
 LogicalVector auto_mask_from_template(const NumericVector& tmpl, int nxyz) {
@@ -1952,6 +2036,7 @@ List cpp_volreg_estimate(
 
   bool robust_template = true;
   double trim_frac = 0.2;
+  std::string ref_mode = get_str_ctrl(control, "ref_mode", "middle");
   if (control.containsElementNamed("robust_template")) {
     robust_template = as<bool>(control["robust_template"]);
   }
@@ -2009,7 +2094,10 @@ List cpp_volreg_estimate(
   NumericMatrix par(nt, 6);
   NumericMatrix mats = identity_mats(nt);
 
-  NumericVector template_vol = extract_ref_volume(data, nx, ny, nz, ref_index);
+  bool robust_mean_ref = (ref_mode == "robust_mean") && nt > 1;
+  NumericVector template_vol = robust_mean_ref
+                                   ? trimmed_mean_template(data, nx, ny, nz, nt, trim_frac)
+                                   : extract_ref_volume(data, nx, ny, nz, ref_index);
 
   LogicalVector fit_mask = build_mask(mask, nxyz);
   if (mask.isNull()) {
@@ -2047,7 +2135,9 @@ List cpp_volreg_estimate(
     flags[t] = fit.flags;
   };
 
-  int ref_t = ref_index - 1;
+  int ref_t = robust_mean_ref
+                  ? select_reference_frame_from_template(data, template_vol, nt, nxyz, fit_mask)
+                  : (ref_index - 1);
   Vec3 com_ref = center_of_mass_3d(template_vol, nx, ny, nz, pixdim, fit_mask);
   Vec3 com_init_ref = center_of_mass_frame(data, nx, ny, nz, nxyz, ref_t, pixdim, fit_mask);
   Pose6 ref_init = make_pose(com_ref.x - com_init_ref.x,

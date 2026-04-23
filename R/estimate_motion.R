@@ -32,6 +32,7 @@ estimate_motion <- function(
   )
 
   ctl <- utils::modifyList(control, list(engine = engine, verbose = isTRUE(verbose), tr = inp$tr))
+  ctl$ref_mode <- ref
 
   cpp_volreg_estimate(
     data = inp$data,
