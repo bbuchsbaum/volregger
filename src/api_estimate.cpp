@@ -2216,6 +2216,7 @@ NumericVector build_aligned_trimmed_template(const NumericVector& data,
                                              int nxyz,
                                              const NumericVector& pixdim,
                                              double trim_frac,
+                                             bool valid_only,
                                              int nthreads = 1) {
   NumericVector out(nxyz);
   int trim_n = static_cast<int>(std::floor(trim_frac * nt));
@@ -2231,20 +2232,31 @@ NumericVector build_aligned_trimmed_template(const NumericVector& data,
       int j = rem / nx;
       int i = rem - j * nx;
 
+      int n_valid = 0;
       for (int t = 0; t < nt; ++t) {
         bool in_bounds = false;
         fixed_to_moving_vox(i, j, k, nx, ny, nz, pixdim, poses[static_cast<size_t>(t)], src, &in_bounds);
         if (in_bounds) {
-          vals[static_cast<size_t>(t)] =
-              sample_trilinear_frame(data, nx, ny, nz, nxyz, t, src[0], src[1], src[2]);
-        } else {
-          vals[static_cast<size_t>(t)] = 0.0;
+          double mv = sample_trilinear_frame(data, nx, ny, nz, nxyz, t, src[0], src[1], src[2]);
+          if (R_finite(mv)) {
+            vals[static_cast<size_t>(n_valid)] = mv;
+            ++n_valid;
+          }
+        } else if (!valid_only) {
+          vals[static_cast<size_t>(n_valid)] = 0.0;
+          ++n_valid;
         }
       }
 
-      std::sort(vals.begin(), vals.end());
-      int lo = trim_n;
-      int hi = nt - trim_n;
+      if (n_valid <= 0) {
+        out[v] = 0.0;
+        continue;
+      }
+
+      std::sort(vals.begin(), vals.begin() + n_valid);
+      int trim_here = std::min(trim_n, (n_valid - 1) / 2);
+      int lo = trim_here;
+      int hi = n_valid - trim_here;
       double s = 0.0;
       for (int tt = lo; tt < hi; ++tt) {
         s += vals[static_cast<size_t>(tt)];
@@ -2711,10 +2723,14 @@ List cpp_volreg_estimate(
   if (control.containsElementNamed("template_refresh")) {
     template_refresh = as<bool>(control["template_refresh"]);
   }
+  bool template_refresh_valid_only = false;
+  if (control.containsElementNamed("template_refresh_valid_only")) {
+    template_refresh_valid_only = as<bool>(control["template_refresh_valid_only"]);
+  }
 
   if (template_refresh) {
         template_vol = build_aligned_trimmed_template(
-            data, poses, nx, ny, nz, nt, nxyz, pixdim, trim_frac, nthreads);
+            data, poses, nx, ny, nz, nt, nxyz, pixdim, trim_frac, template_refresh_valid_only, nthreads);
     solve_sequence(poses[ref_t], true);
   }
 

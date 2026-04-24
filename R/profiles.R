@@ -105,6 +105,7 @@ volreg_profile <- function(
         nuisance_orthogonalize = TRUE,
         nuisance_ridge = 1e-4,
         adaptive_huber = TRUE,
+        template_refresh_valid_only = TRUE,
         huber_k = 0.25
       )
     ),

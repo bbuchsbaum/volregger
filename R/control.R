@@ -15,6 +15,7 @@ volreg_control <- function() {
     tol_cost = 1e-6,
     n_restarts = 0L,
     robust_template = TRUE,
+    template_refresh_valid_only = FALSE,
     use_overlap_taper = TRUE,
     edge_exclude_frac = 0,
     edge_exclude_vox = 0L,

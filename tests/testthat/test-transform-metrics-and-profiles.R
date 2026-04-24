@@ -94,6 +94,7 @@ test_that("tuned adaptive-Huber profile uses a conservative residual-scale multi
   expect_s3_class(prof, "volreg_profile")
   expect_true(all(c("adaptive_huber", "huber_0.25") %in% prof$components))
   expect_true(isTRUE(prof$control$adaptive_huber))
+  expect_true(isTRUE(prof$control$template_refresh_valid_only))
   expect_equal(prof$control$huber_k, 0.25)
 })
 

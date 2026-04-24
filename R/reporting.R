@@ -277,6 +277,9 @@ as.data.frame.volregger_report <- function(x, ...) {
   if (isTRUE(control$robust_template)) {
     components <- c(components, "robust_template")
   }
+  if (isTRUE(control$template_refresh_valid_only)) {
+    components <- c(components, "valid_template_refresh")
+  }
   if (isTRUE(control$use_overlap_taper)) {
     components <- c(components, "overlap_taper")
   }

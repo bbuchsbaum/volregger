@@ -86,6 +86,43 @@ test_that("robust_mean reference anchors to the consensus frame", {
   expect_true(mean(abs(est_rob$par[c(1, 3), 1])) < mean(abs(est_mid$par[c(1, 3), 1])))
 })
 
+test_that("template refresh ignores invalid boundary samples", {
+  base <- array(10, dim = c(11, 11, 5))
+  base[4:8, 4:8, 2:4] <- 60
+
+  x <- array(10, dim = c(11, 11, 5, 3))
+  x[, , , 1] <- base
+  x[, , , 2] <- base
+  shifted <- array(10, dim = c(11, 11, 5))
+  shifted[3:11, , ] <- base[1:9, , ]
+  x[, , , 3] <- shifted
+
+  ctl <- utils::modifyList(
+    volreg_control(),
+    list(
+      max_iter = 0L,
+      n_samples = 605L,
+      robust_template = TRUE,
+      template_refresh = TRUE,
+      template_refresh_valid_only = TRUE,
+      capture_boost = FALSE,
+      n_restarts = 0L,
+      use_overlap_taper = FALSE
+    )
+  )
+
+  est <- estimate_motion(
+    x,
+    mask = array(TRUE, dim = c(11, 11, 5)),
+    ref = "robust_mean",
+    control = ctl
+  )
+
+  expect_true(max(abs(est$par[, 1])) > 0.05)
+  expect_gte(min(est$template[, , 3]), 9.9)
+  expect_lte(max(est$template), 60.1)
+})
+
 test_that("apply_motion applies translation components", {
   x <- array(0, dim = c(7, 7, 3, 1))
   x[4, 4, 2, 1] <- 1
