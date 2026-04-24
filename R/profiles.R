@@ -14,6 +14,7 @@ volreg_profile <- function(
       "ic_whiten",
       "ic_nuisance",
       "ic_nuisance_adaptive",
+      "ic_nuisance_adaptive_tuned",
       "ic_nuisance_polish",
       "ic_nuisance_full",
       "slice_spline"
@@ -90,6 +91,20 @@ volreg_profile <- function(
         nuisance_orthogonalize = TRUE,
         nuisance_ridge = 1e-4,
         adaptive_huber = TRUE
+      )
+    ),
+    ic_nuisance_adaptive_tuned = list(
+      engine = "rigid_robust",
+      components = c("capture_boost", "ic_stencil", "whiten", "nuisance", "adaptive_huber", "huber_0.5"),
+      control = list(
+        use_ic_stencil = TRUE,
+        whiten_modes = TRUE,
+        use_nuisance_marginalization = TRUE,
+        nuisance_include_template = FALSE,
+        nuisance_orthogonalize = TRUE,
+        nuisance_ridge = 1e-4,
+        adaptive_huber = TRUE,
+        huber_k = 0.5
       )
     ),
     ic_nuisance_polish = list(

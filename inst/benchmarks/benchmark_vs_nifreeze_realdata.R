@@ -20,6 +20,7 @@ defaults <- list(
   volreg_interp = NULL,
   volreg_pad = "clamp",
   volreg_zpad = "0",
+  volreg_huber_k = NULL,
   volreg_edge_exclude_frac = NULL,
   volreg_ref = "robust_mean",
   nifreeze_model = "mean",
@@ -231,6 +232,7 @@ run_one <- function(method, scenario_name) {
         "--interp", volreg_interp,
         "--pad", opts$volreg_pad,
         "--zpad", as.character(volreg_zpad),
+        if (!is.null(opts$volreg_huber_k)) c("--huber-k", opts$volreg_huber_k),
         if (!is.null(opts$volreg_edge_exclude_frac)) c("--edge-exclude-frac", opts$volreg_edge_exclude_frac),
         "--nthreads", opts$nthreads
       ),
@@ -245,6 +247,7 @@ run_one <- function(method, scenario_name) {
         volreg_interp,
         opts$volreg_pad,
         paste0("zpad", volreg_zpad),
+        paste0("huber", opts$volreg_huber_k %||% "default"),
         paste0("edge", opts$volreg_edge_exclude_frac %||% 0),
         sep = ":"
       ),

@@ -88,6 +88,15 @@ test_that("adaptive-Huber profile keeps IC setup and scales robust threshold", {
   expect_false(isTRUE(prof$control$use_dense_polish))
 })
 
+test_that("tuned adaptive-Huber profile uses a tighter residual-scale multiplier", {
+  prof <- volreg_profile("ic_nuisance_adaptive_tuned")
+
+  expect_s3_class(prof, "volreg_profile")
+  expect_true(all(c("adaptive_huber", "huber_0.5") %in% prof$components))
+  expect_true(isTRUE(prof$control$adaptive_huber))
+  expect_equal(prof$control$huber_k, 0.5)
+})
+
 test_that("fit summaries and tabular output expose richer QC fields", {
   set.seed(200)
   x0 <- array(rnorm(8 * 8 * 4), dim = c(8, 8, 4))

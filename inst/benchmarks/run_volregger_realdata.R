@@ -12,6 +12,7 @@ defaults <- list(
   interp = NULL,
   pad = "clamp",
   zpad = "0",
+  huber_k = NULL,
   edge_exclude_frac = NULL,
   nthreads = "1"
 )
@@ -39,6 +40,9 @@ if (!is.null(opts$mask)) {
 }
 
 profile_overrides <- list(nthreads = as.integer(opts$nthreads))
+if (!is.null(opts$huber_k)) {
+  profile_overrides$huber_k <- as.numeric(opts$huber_k)
+}
 if (!is.null(opts$edge_exclude_frac)) {
   profile_overrides$edge_exclude_frac <- as.numeric(opts$edge_exclude_frac)
 }
@@ -165,6 +169,7 @@ write.csv(
     interp = interp_final,
     pad = opts$pad,
     zpad = zpad_final,
+    huber_k = profile$control$huber_k %||% NA_real_,
     edge_exclude_frac = profile$control$edge_exclude_frac %||% 0,
     components = paste(profile$components, collapse = "+"),
     with_report = isTRUE(opts$with_report),
