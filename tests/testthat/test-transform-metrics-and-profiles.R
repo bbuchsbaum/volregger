@@ -130,6 +130,17 @@ test_that("fit summaries and tabular output expose richer QC fields", {
   expect_true(all(c("cost_drop", "motion_spike", "fit_failure", "censor_suggest") %in% names(tab)))
 })
 
+test_that("real-data benchmark thread resolver supports auto and explicit counts", {
+  env <- new.env(parent = globalenv())
+  source(testthat::test_path("..", "..", "inst", "benchmarks", "realdata_benchmark_lib.R"), local = env)
+
+  expect_equal(env$resolve_benchmark_nthreads("1"), 1L)
+  expect_equal(env$resolve_benchmark_nthreads("2"), 2L)
+  expect_true(env$resolve_benchmark_nthreads("auto") >= 1L)
+  expect_true(env$resolve_benchmark_nthreads("auto") <= 4L)
+  expect_error(env$resolve_benchmark_nthreads("0"), "positive integer")
+})
+
 test_that("real-data benchmark truth metrics expose a broad scorecard", {
   env <- new.env(parent = globalenv())
   source(testthat::test_path("..", "..", "inst", "benchmarks", "realdata_benchmark_lib.R"), local = env)

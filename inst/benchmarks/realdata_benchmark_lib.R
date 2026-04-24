@@ -62,6 +62,28 @@ parse_benchmark_args <- function(args, defaults = list(), flags = character()) {
   out
 }
 
+resolve_benchmark_nthreads <- function(value = "auto", max_auto = 4L) {
+  if (is.null(value)) {
+    value <- "auto"
+  }
+  if (identical(tolower(as.character(value)), "auto")) {
+    cores <- parallel::detectCores(logical = FALSE)
+    if (is.na(cores) || cores < 1L) {
+      cores <- parallel::detectCores(logical = TRUE)
+    }
+    if (is.na(cores) || cores < 1L) {
+      cores <- 1L
+    }
+    return(as.integer(max(1L, min(as.integer(max_auto), as.integer(cores)))))
+  }
+
+  n <- as.integer(value)
+  if (length(n) != 1L || is.na(n) || n < 1L) {
+    stop("nthreads must be a positive integer or 'auto'", call. = FALSE)
+  }
+  n
+}
+
 parse_frame_limit <- function(value, total_frames) {
   if (is.null(value)) {
     return(total_frames)

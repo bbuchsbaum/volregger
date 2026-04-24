@@ -9,7 +9,7 @@ defaults <- list(
   native_frames = "120",
   truth_frames = "120",
   scenarios = "low_motion,moderate_motion,hard_motion,hard_motion_plus_nuisance",
-  nthreads = "1",
+  nthreads = "4",
   python = Sys.which("python"),
   nifreeze_backend = "docker",
   nifreeze_docker_image = "volregger-nifreeze-benchmark:latest",
@@ -34,6 +34,7 @@ opts <- parse_benchmark_args(
   defaults = defaults,
   flags = c("skip_nifreeze", "skip_afni", "native_only")
 )
+nthreads <- resolve_benchmark_nthreads(opts$nthreads)
 
 input_path <- opts$input %||% default_realdata_input()
 out_dir <- opts$out_dir
@@ -236,7 +237,7 @@ run_one <- function(method, scenario_name) {
         if (!is.null(opts$volreg_huber_k)) c("--huber-k", opts$volreg_huber_k),
         if (!is.null(opts$volreg_max_iter)) c("--max-iter", opts$volreg_max_iter),
         if (!is.null(opts$volreg_edge_exclude_frac)) c("--edge-exclude-frac", opts$volreg_edge_exclude_frac),
-        "--nthreads", opts$nthreads
+        "--nthreads", as.character(nthreads)
       ),
       stdout_path = stdout_path,
       stderr_path = stderr_path
@@ -252,6 +253,7 @@ run_one <- function(method, scenario_name) {
         paste0("huber", opts$volreg_huber_k %||% "default"),
         paste0("iter", opts$volreg_max_iter %||% "default"),
         paste0("edge", opts$volreg_edge_exclude_frac %||% 0),
+        paste0("threads", nthreads),
         sep = ":"
       ),
       stringsAsFactors = FALSE
@@ -288,7 +290,7 @@ run_one <- function(method, scenario_name) {
           "--mask", mask_path,
           "--out-dir", method_dir,
           "--model", opts$nifreeze_model,
-          "--nthreads", opts$nthreads,
+          "--nthreads", as.character(nthreads),
           "--seed", opts$seed
         ),
         stdout_path = stdout_path,
@@ -303,7 +305,7 @@ run_one <- function(method, scenario_name) {
           "--mask", mask_path,
           "--out-dir", method_dir,
           "--model", opts$nifreeze_model,
-          "--nthreads", opts$nthreads,
+          "--nthreads", as.character(nthreads),
           "--seed", opts$seed
         ),
         stdout_path = stdout_path,
@@ -314,7 +316,7 @@ run_one <- function(method, scenario_name) {
     }
     meta <- data.frame(
       method = method,
-      method_model = paste(opts$nifreeze_backend, opts$nifreeze_model, sep = ":"),
+      method_model = paste(opts$nifreeze_backend, opts$nifreeze_model, paste0("threads", nthreads), sep = ":"),
       stringsAsFactors = FALSE
     )
   } else if (identical(method, "afni_3dvolreg")) {

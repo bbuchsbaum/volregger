@@ -15,13 +15,14 @@ defaults <- list(
   huber_k = NULL,
   max_iter = NULL,
   edge_exclude_frac = NULL,
-  nthreads = "1"
+  nthreads = "4"
 )
 opts <- parse_benchmark_args(
   commandArgs(trailingOnly = TRUE),
   defaults = defaults,
   flags = c("with_report")
 )
+nthreads <- resolve_benchmark_nthreads(opts$nthreads)
 
 if (is.null(opts$input) || is.null(opts$out_dir)) {
   stop("--input and --out-dir are required", call. = FALSE)
@@ -40,7 +41,7 @@ if (!is.null(opts$mask)) {
   mask <- as.array(RNifti::readNifti(opts$mask)) > 0
 }
 
-profile_overrides <- list(nthreads = as.integer(opts$nthreads))
+profile_overrides <- list(nthreads = nthreads)
 if (!is.null(opts$huber_k)) {
   profile_overrides$huber_k <- as.numeric(opts$huber_k)
 }
@@ -107,7 +108,7 @@ apply_timing <- time_expr(
     zpad = zpad_final,
     slice_times = if (identical(profile$engine, "rigid_spline")) NULL else NULL,
     mb_groups = if (identical(profile$engine, "rigid_spline")) NULL else NULL,
-    nthreads = as.integer(profile$control$nthreads)
+    nthreads = nthreads
   )
 )
 corrected <- apply_timing$value
@@ -180,6 +181,7 @@ write.csv(
     huber_k = profile$control$huber_k %||% NA_real_,
     max_iter = profile$control$max_iter,
     edge_exclude_frac = profile$control$edge_exclude_frac %||% 0,
+    nthreads = nthreads,
     components = paste(profile$components, collapse = "+"),
     with_report = isTRUE(opts$with_report),
     stringsAsFactors = FALSE
