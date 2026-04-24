@@ -15,6 +15,7 @@ volreg(
   resample = TRUE,
   interp_final = c("bspline", "lanczos", "linear"),
   pad_final = c("clamp", "zero"),
+  zpad_final = 0L,
   qc = TRUE,
   control = volreg_control(),
   verbose = FALSE
@@ -40,6 +41,9 @@ volreg(
 \item{interp_final}{Final interpolation method.}
 
 \item{pad_final}{Boundary handling for final resampling.}
+
+\item{zpad_final}{Number of symmetric zero-valued voxels to add before final
+resampling and cropping back to the original grid.}
 
 \item{qc}{If TRUE, compute QC metrics.}
 

@@ -19,6 +19,7 @@ defaults <- list(
   volreg_profile_truth = "ic_nuisance",
   volreg_interp = NULL,
   volreg_pad = "clamp",
+  volreg_zpad = "0",
   volreg_edge_exclude_frac = NULL,
   volreg_ref = "robust_mean",
   nifreeze_model = "mean",
@@ -214,6 +215,10 @@ run_one <- function(method, scenario_name) {
     if (!opts$volreg_pad %in% c("clamp", "zero")) {
       stop("--volreg-pad must be one of: clamp, zero", call. = FALSE)
     }
+    volreg_zpad <- as.integer(opts$volreg_zpad)
+    if (length(volreg_zpad) != 1L || is.na(volreg_zpad) || volreg_zpad < 0L) {
+      stop("--volreg-zpad must be a non-negative integer", call. = FALSE)
+    }
     prof <- run_profiled_command(
       command = file.path(R.home("bin"), "Rscript"),
       args = c(
@@ -225,6 +230,7 @@ run_one <- function(method, scenario_name) {
         "--ref", opts$volreg_ref,
         "--interp", volreg_interp,
         "--pad", opts$volreg_pad,
+        "--zpad", as.character(volreg_zpad),
         if (!is.null(opts$volreg_edge_exclude_frac)) c("--edge-exclude-frac", opts$volreg_edge_exclude_frac),
         "--nthreads", opts$nthreads
       ),
@@ -238,6 +244,7 @@ run_one <- function(method, scenario_name) {
         opts$volreg_ref,
         volreg_interp,
         opts$volreg_pad,
+        paste0("zpad", volreg_zpad),
         paste0("edge", opts$volreg_edge_exclude_frac %||% 0),
         sep = ":"
       ),

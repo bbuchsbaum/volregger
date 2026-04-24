@@ -11,8 +11,8 @@ Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
 // cpp_volreg_apply
-SEXP cpp_volreg_apply(NumericVector data, IntegerVector dim, NumericVector pixdim, NumericMatrix par, Nullable<NumericVector> slice_times, Nullable<IntegerVector> mb_groups, std::string interp, int pad_mode, int nthreads);
-RcppExport SEXP _volregger_cpp_volreg_apply(SEXP dataSEXP, SEXP dimSEXP, SEXP pixdimSEXP, SEXP parSEXP, SEXP slice_timesSEXP, SEXP mb_groupsSEXP, SEXP interpSEXP, SEXP pad_modeSEXP, SEXP nthreadsSEXP) {
+SEXP cpp_volreg_apply(NumericVector data, IntegerVector dim, NumericVector pixdim, NumericMatrix par, Nullable<NumericVector> slice_times, Nullable<IntegerVector> mb_groups, std::string interp, int pad_mode, int zpad, int nthreads);
+RcppExport SEXP _volregger_cpp_volreg_apply(SEXP dataSEXP, SEXP dimSEXP, SEXP pixdimSEXP, SEXP parSEXP, SEXP slice_timesSEXP, SEXP mb_groupsSEXP, SEXP interpSEXP, SEXP pad_modeSEXP, SEXP zpadSEXP, SEXP nthreadsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -24,8 +24,9 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< Nullable<IntegerVector> >::type mb_groups(mb_groupsSEXP);
     Rcpp::traits::input_parameter< std::string >::type interp(interpSEXP);
     Rcpp::traits::input_parameter< int >::type pad_mode(pad_modeSEXP);
+    Rcpp::traits::input_parameter< int >::type zpad(zpadSEXP);
     Rcpp::traits::input_parameter< int >::type nthreads(nthreadsSEXP);
-    rcpp_result_gen = Rcpp::wrap(cpp_volreg_apply(data, dim, pixdim, par, slice_times, mb_groups, interp, pad_mode, nthreads));
+    rcpp_result_gen = Rcpp::wrap(cpp_volreg_apply(data, dim, pixdim, par, slice_times, mb_groups, interp, pad_mode, zpad, nthreads));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -81,7 +82,7 @@ END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
-    {"_volregger_cpp_volreg_apply", (DL_FUNC) &_volregger_cpp_volreg_apply, 9},
+    {"_volregger_cpp_volreg_apply", (DL_FUNC) &_volregger_cpp_volreg_apply, 10},
     {"_volregger_cpp_volreg_estimate", (DL_FUNC) &_volregger_cpp_volreg_estimate, 8},
     {"_volregger_cpp_volreg_metrics", (DL_FUNC) &_volregger_cpp_volreg_metrics, 7},
     {"_volregger_cpp_fit_pose_spline", (DL_FUNC) &_volregger_cpp_fit_pose_spline, 5},

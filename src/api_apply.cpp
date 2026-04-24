@@ -326,6 +326,40 @@ inline void fixed_to_moving_vox(int i,
   src_xyz[2] = zm / pixdim[2] + cz;
 }
 
+inline void fixed_to_moving_vox_zpad(int i,
+                                     int j,
+                                     int k,
+                                     int nx,
+                                     int ny,
+                                     int nz,
+                                     int zpad,
+                                     const NumericVector& pixdim,
+                                     double tx,
+                                     double ty,
+                                     double tz,
+                                     double rx,
+                                     double ry,
+                                     double rz,
+                                     double* src_xyz) {
+  fixed_to_moving_vox(i + zpad,
+                      j + zpad,
+                      k + zpad,
+                      nx + 2 * zpad,
+                      ny + 2 * zpad,
+                      nz + 2 * zpad,
+                      pixdim,
+                      tx,
+                      ty,
+                      tz,
+                      rx,
+                      ry,
+                      rz,
+                      src_xyz);
+  src_xyz[0] -= zpad;
+  src_xyz[1] -= zpad;
+  src_xyz[2] -= zpad;
+}
+
 }  // namespace
 
 // [[Rcpp::export]]
@@ -338,6 +372,7 @@ SEXP cpp_volreg_apply(
     Nullable<IntegerVector> mb_groups = R_NilValue,
     std::string interp = "bspline",
     int pad_mode = 0,
+    int zpad = 0,
     int nthreads = 1) {
   if (dim.size() != 4) {
     stop("dim must be length 4");
@@ -351,6 +386,12 @@ SEXP cpp_volreg_apply(
   int nz = dim[2];
   int nt = dim[3];
   int nxyz = nx * ny * nz;
+  zpad = std::max(0, zpad);
+  if (zpad > 0) {
+    // AFNI-style zpad means resampling a symmetrically zero-padded volume
+    // and cropping back to the original grid.
+    pad_mode = 1;
+  }
 
   enum InterpMode { LINEAR = 0, BSPLINE = 1, LANCZOS = 2 };
   InterpMode mode = BSPLINE;
@@ -460,7 +501,11 @@ SEXP cpp_volreg_apply(
 
       for (int j = 0; j < ny; ++j) {
         for (int i = 0; i < nx; ++i) {
-          fixed_to_moving_vox(i, j, k, nx, ny, nz, pixdim, tx, ty, tz, rx, ry, rz, src);
+          if (zpad > 0) {
+            fixed_to_moving_vox_zpad(i, j, k, nx, ny, nz, zpad, pixdim, tx, ty, tz, rx, ry, rz, src);
+          } else {
+            fixed_to_moving_vox(i, j, k, nx, ny, nz, pixdim, tx, ty, tz, rx, ry, rz, src);
+          }
           double v = 0.0;
           if (mode == LINEAR) {
             v = sample_trilinear(data, nx, ny, nz, nxyz, t, src[0], src[1], src[2], pad_mode);

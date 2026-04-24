@@ -9,6 +9,7 @@ apply_motion(
   motion,
   interp = c("bspline", "lanczos", "linear"),
   pad = c("clamp", "zero"),
+  zpad = 0L,
   slice_times = NULL,
   mb_groups = NULL,
   nthreads = 1L
@@ -22,6 +23,9 @@ apply_motion(
 \item{interp}{Final interpolation method.}
 
 \item{pad}{Boundary handling for samples outside the input field of view.}
+
+\item{zpad}{Number of symmetric zero-valued voxels to add before resampling
+and cropping back to the original grid.}
 
 \item{slice_times}{Optional slice timing offsets.}
 

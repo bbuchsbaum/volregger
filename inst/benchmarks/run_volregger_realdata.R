@@ -11,6 +11,7 @@ defaults <- list(
   ref = "robust_mean",
   interp = NULL,
   pad = "clamp",
+  zpad = "0",
   edge_exclude_frac = NULL,
   nthreads = "1"
 )
@@ -52,6 +53,10 @@ if (!interp_final %in% c("bspline", "lanczos", "linear")) {
 if (!opts$pad %in% c("clamp", "zero")) {
   stop("--pad must be one of: clamp, zero", call. = FALSE)
 }
+zpad_final <- as.integer(opts$zpad)
+if (length(zpad_final) != 1L || is.na(zpad_final) || zpad_final < 0L) {
+  stop("--zpad must be a non-negative integer", call. = FALSE)
+}
 
 estimate_timing <- time_expr(
   estimate_motion(
@@ -87,6 +92,7 @@ apply_timing <- time_expr(
     motion = par_apply,
     interp = interp_final,
     pad = opts$pad,
+    zpad = zpad_final,
     slice_times = if (identical(profile$engine, "rigid_spline")) NULL else NULL,
     mb_groups = if (identical(profile$engine, "rigid_spline")) NULL else NULL,
     nthreads = as.integer(profile$control$nthreads)
@@ -158,6 +164,7 @@ write.csv(
     engine = profile$engine,
     interp = interp_final,
     pad = opts$pad,
+    zpad = zpad_final,
     edge_exclude_frac = profile$control$edge_exclude_frac %||% 0,
     components = paste(profile$components, collapse = "+"),
     with_report = isTRUE(opts$with_report),

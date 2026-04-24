@@ -10,6 +10,8 @@
 #' @param resample If TRUE, apply estimated motion to generate corrected output.
 #' @param interp_final Final interpolation method.
 #' @param pad_final Boundary handling for final resampling.
+#' @param zpad_final Number of symmetric zero-valued voxels to add before final
+#'   resampling and cropping back to the original grid.
 #' @param qc If TRUE, compute QC metrics.
 #' @param control Control list.
 #' @param verbose Verbose logging.
@@ -26,6 +28,7 @@ volreg <- function(
     resample = TRUE,
     interp_final = c("bspline", "lanczos", "linear"),
     pad_final = c("clamp", "zero"),
+    zpad_final = 0L,
     qc = TRUE,
     control = volreg_control(),
     verbose = FALSE) {
@@ -33,6 +36,10 @@ volreg <- function(
   engine <- match.arg(engine)
   interp_final <- match.arg(interp_final)
   pad_final <- match.arg(pad_final)
+  zpad_final <- as.integer(zpad_final)
+  if (length(zpad_final) != 1L || is.na(zpad_final) || zpad_final < 0L) {
+    stop("zpad_final must be a non-negative integer", call. = FALSE)
+  }
 
   inp <- .as_volreg_input(
     x = x,
@@ -79,6 +86,7 @@ volreg <- function(
       mb_groups = if (identical(engine, "rigid_spline")) inp$mb_groups else NULL,
       interp = interp_final,
       pad_mode = if (identical(pad_final, "zero")) 1L else 0L,
+      zpad = zpad_final,
       nthreads = as.integer(ctl$nthreads)
     )
     corrected <- .rebuild_like(x, arr_corr)

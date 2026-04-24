@@ -150,6 +150,21 @@ test_that("apply_motion exposes clamp and zero boundary handling", {
   expect_equal(y_zero[1, 1, 1, 1], 0)
 })
 
+test_that("apply_motion zpad matches cropped symmetric zero padding", {
+  set.seed(23)
+  x <- array(rnorm(7 * 6 * 4), dim = c(7, 6, 4, 1))
+  motion <- matrix(0, nrow = 1, ncol = 6)
+  motion[1, 1] <- 1.1
+  motion[1, 2] <- -0.6
+  motion[1, 6] <- 0.08
+
+  y_zero <- apply_motion(x, motion, interp = "lanczos", pad = "zero")
+  y_zpad <- apply_motion(x, motion, interp = "lanczos", zpad = 4L)
+
+  expect_equal(y_zpad, y_zero, tolerance = 1e-10)
+  expect_error(apply_motion(x, motion, zpad = -1L), "zpad must be")
+})
+
 test_that("slice-aware packet interpolation changes output when offsets supplied", {
   set.seed(11)
   x <- array(rnorm(8 * 8 * 4 * 3), dim = c(8, 8, 4, 3))
