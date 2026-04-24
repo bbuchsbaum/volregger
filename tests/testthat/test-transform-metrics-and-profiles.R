@@ -92,10 +92,11 @@ test_that("tuned adaptive-Huber profile uses a conservative residual-scale multi
   prof <- volreg_profile("ic_nuisance_adaptive_tuned")
 
   expect_s3_class(prof, "volreg_profile")
-  expect_true(all(c("adaptive_huber", "huber_0.25") %in% prof$components))
+  expect_true(all(c("adaptive_huber", "huber_0.25", "iter_12") %in% prof$components))
   expect_true(isTRUE(prof$control$adaptive_huber))
   expect_true(isTRUE(prof$control$template_refresh_valid_only))
   expect_equal(prof$control$huber_k, 0.25)
+  expect_equal(prof$control$max_iter, 12L)
 })
 
 test_that("guarded adaptive-Huber profile enables common-objective candidate selection", {

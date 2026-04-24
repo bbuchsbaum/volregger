@@ -242,6 +242,30 @@ run_one <- function(method, scenario_name) {
       stdout_path = stdout_path,
       stderr_path = stderr_path
     )
+    run_meta <- NULL
+    run_meta_path <- file.path(method_dir, "run_metadata.csv")
+    if (file.exists(run_meta_path)) {
+      run_meta <- utils::read.csv(run_meta_path, stringsAsFactors = FALSE)
+      if (nrow(run_meta)) {
+        run_meta <- run_meta[1, , drop = FALSE]
+      } else {
+        run_meta <- NULL
+      }
+    }
+    actual_huber <- opts$volreg_huber_k %||% "default"
+    actual_iter <- opts$volreg_max_iter %||% "default"
+    actual_edge <- opts$volreg_edge_exclude_frac %||% 0
+    if (!is.null(run_meta)) {
+      if ("huber_k" %in% names(run_meta) && is.finite(run_meta$huber_k[1])) {
+        actual_huber <- run_meta$huber_k[1]
+      }
+      if ("max_iter" %in% names(run_meta) && is.finite(run_meta$max_iter[1])) {
+        actual_iter <- run_meta$max_iter[1]
+      }
+      if ("edge_exclude_frac" %in% names(run_meta) && is.finite(run_meta$edge_exclude_frac[1])) {
+        actual_edge <- run_meta$edge_exclude_frac[1]
+      }
+    }
     meta <- data.frame(
       method = method,
       method_model = paste(
@@ -250,9 +274,9 @@ run_one <- function(method, scenario_name) {
         volreg_interp,
         opts$volreg_pad,
         paste0("zpad", volreg_zpad),
-        paste0("huber", opts$volreg_huber_k %||% "default"),
-        paste0("iter", opts$volreg_max_iter %||% "default"),
-        paste0("edge", opts$volreg_edge_exclude_frac %||% 0),
+        paste0("huber", actual_huber),
+        paste0("iter", actual_iter),
+        paste0("edge", actual_edge),
         paste0("threads", nthreads),
         sep = ":"
       ),
