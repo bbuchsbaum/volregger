@@ -142,6 +142,15 @@ test_that("real-data benchmark thread resolver supports auto and explicit counts
   expect_error(env$resolve_benchmark_nthreads("0"), "positive integer")
 })
 
+test_that("real-data benchmark scalar metadata follows estimator last-value convention", {
+  env <- new.env(parent = globalenv())
+  source(testthat::test_path("..", "..", "inst", "benchmarks", "realdata_benchmark_lib.R"), local = env)
+
+  expect_equal(env$benchmark_scalar_last(c(30L, 20L, 12L), NA_integer_), 12L)
+  expect_equal(env$benchmark_scalar_last(numeric(), 1), 1)
+  expect_equal(env$benchmark_scalar_last(NULL, "default"), "default")
+})
+
 test_that("real-data benchmark truth metrics expose a broad scorecard", {
   env <- new.env(parent = globalenv())
   source(testthat::test_path("..", "..", "inst", "benchmarks", "realdata_benchmark_lib.R"), local = env)

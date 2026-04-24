@@ -84,6 +84,13 @@ resolve_benchmark_nthreads <- function(value = "auto", max_auto = 4L) {
   n
 }
 
+benchmark_scalar_last <- function(value, default = NA) {
+  if (is.null(value) || !length(value)) {
+    return(default)
+  }
+  value[[length(value)]]
+}
+
 parse_frame_limit <- function(value, total_frames) {
   if (is.null(value)) {
     return(total_frames)
