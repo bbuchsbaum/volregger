@@ -13,6 +13,7 @@ defaults <- list(
   pad = "clamp",
   zpad = "0",
   huber_k = NULL,
+  max_iter = NULL,
   edge_exclude_frac = NULL,
   nthreads = "1"
 )
@@ -42,6 +43,13 @@ if (!is.null(opts$mask)) {
 profile_overrides <- list(nthreads = as.integer(opts$nthreads))
 if (!is.null(opts$huber_k)) {
   profile_overrides$huber_k <- as.numeric(opts$huber_k)
+}
+if (!is.null(opts$max_iter)) {
+  max_iter <- as.integer(opts$max_iter)
+  if (length(max_iter) != 1L || is.na(max_iter) || max_iter < 1L) {
+    stop("--max-iter must be a positive integer", call. = FALSE)
+  }
+  profile_overrides$max_iter <- max_iter
 }
 if (!is.null(opts$edge_exclude_frac)) {
   profile_overrides$edge_exclude_frac <- as.numeric(opts$edge_exclude_frac)
@@ -170,6 +178,7 @@ write.csv(
     pad = opts$pad,
     zpad = zpad_final,
     huber_k = profile$control$huber_k %||% NA_real_,
+    max_iter = profile$control$max_iter,
     edge_exclude_frac = profile$control$edge_exclude_frac %||% 0,
     components = paste(profile$components, collapse = "+"),
     with_report = isTRUE(opts$with_report),
