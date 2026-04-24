@@ -123,7 +123,6 @@ test_that("external truth benchmark claim metrics hold across varied scenarios",
       "--native-frames", "4",
       "--truth-frames", "6",
       "--scenarios", paste(scenarios, collapse = ","),
-      "--skip-afni",
       "--nthreads", "2"
     ),
     out_dir = out_dir
@@ -147,4 +146,18 @@ test_that("external truth benchmark claim metrics hold across varied scenarios",
   expect_equal(sort(unique(rows$scenario)), sort(scenarios))
   expect_false(any(rows$losses > 0, na.rm = TRUE))
   expect_true(all(rows$wins > 0 | rows$ties > 0))
+
+  afni_rows <- claim_summary[
+    claim_summary$scenario %in% scenarios &
+      claim_summary$baseline == "afni_3dvolreg" &
+      claim_summary$claim_metric &
+      claim_summary$family %in% c("truth_displacement", "truth_pose", "truth_matrix"),
+  ]
+  if (!nrow(afni_rows)) {
+    skip("AFNI benchmark backend unavailable in this environment")
+  }
+
+  expect_equal(sort(unique(afni_rows$scenario)), sort(scenarios))
+  expect_false(any(afni_rows$losses > 0, na.rm = TRUE))
+  expect_true(all(afni_rows$wins > 0 | afni_rows$ties > 0))
 })
