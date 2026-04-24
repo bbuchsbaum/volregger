@@ -18,6 +18,8 @@ defaults <- list(
   volreg_profile_native = "fast_native",
   volreg_profile_truth = "ic_nuisance",
   volreg_interp = NULL,
+  volreg_pad = "clamp",
+  volreg_edge_exclude_frac = NULL,
   volreg_ref = "robust_mean",
   nifreeze_model = "mean",
   afni_image = "afni/afni_make_build",
@@ -209,6 +211,9 @@ run_one <- function(method, scenario_name) {
     }
     volreg_profile_spec <- volreg_profile(volreg_profile_name)
     volreg_interp <- opts$volreg_interp %||% volreg_profile_spec$control$interp_final %||% "bspline"
+    if (!opts$volreg_pad %in% c("clamp", "zero")) {
+      stop("--volreg-pad must be one of: clamp, zero", call. = FALSE)
+    }
     prof <- run_profiled_command(
       command = file.path(R.home("bin"), "Rscript"),
       args = c(
@@ -219,6 +224,8 @@ run_one <- function(method, scenario_name) {
         "--profile", volreg_profile_name,
         "--ref", opts$volreg_ref,
         "--interp", volreg_interp,
+        "--pad", opts$volreg_pad,
+        if (!is.null(opts$volreg_edge_exclude_frac)) c("--edge-exclude-frac", opts$volreg_edge_exclude_frac),
         "--nthreads", opts$nthreads
       ),
       stdout_path = stdout_path,
@@ -226,7 +233,14 @@ run_one <- function(method, scenario_name) {
     )
     meta <- data.frame(
       method = method,
-      method_model = paste(volreg_profile_name, opts$volreg_ref, volreg_interp, sep = ":"),
+      method_model = paste(
+        volreg_profile_name,
+        opts$volreg_ref,
+        volreg_interp,
+        opts$volreg_pad,
+        paste0("edge", opts$volreg_edge_exclude_frac %||% 0),
+        sep = ":"
+      ),
       stringsAsFactors = FALSE
     )
   } else if (identical(method, "nifreeze")) {

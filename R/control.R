@@ -14,6 +14,8 @@ volreg_control <- function() {
     n_restarts = 0L,
     robust_template = TRUE,
     use_overlap_taper = TRUE,
+    edge_exclude_frac = 0,
+    edge_exclude_vox = 0L,
     capture_boost = TRUE,
     capture_trans_mm = 8,
     capture_rot_deg = 8,

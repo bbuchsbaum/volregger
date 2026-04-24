@@ -24,6 +24,21 @@ test_that("apply_motion returns same shape", {
   expect_equal(dim(y), dim(x))
 })
 
+test_that("edge exclusion removes fitting voxels near the FOV boundary", {
+  set.seed(22)
+  x <- array(rnorm(7 * 7 * 5 * 3), dim = c(7, 7, 5, 3))
+  mask <- array(TRUE, dim = c(7, 7, 5))
+  ctl <- utils::modifyList(volreg_control(), list(max_iter = 2L, n_samples = 2000L, edge_exclude_vox = 1L))
+
+  est <- estimate_motion(x, mask = mask, control = ctl)
+
+  expect_false(est$mask[1, 4, 3])
+  expect_false(est$mask[7, 4, 3])
+  expect_false(est$mask[4, 1, 3])
+  expect_false(est$mask[4, 4, 1])
+  expect_true(est$mask[4, 4, 3])
+})
+
 test_that("estimate_motion detects known translation perturbation", {
   x0 <- array(0, dim = c(9, 9, 5))
   x0[5, 5, 3] <- 5
@@ -120,6 +135,19 @@ test_that("apply_motion interpolation modes are distinct on fractional shifts", 
   d2 <- max(abs(y_lin - y_lan))
   expect_true(d1 > 0)
   expect_true(d2 > 0)
+})
+
+test_that("apply_motion exposes clamp and zero boundary handling", {
+  x <- array(0, dim = c(6, 5, 3, 1))
+  x[1, , , 1] <- 10
+  motion <- matrix(0, nrow = 1, ncol = 6)
+  motion[1, 1] <- 2
+
+  y_clamp <- apply_motion(x, motion, interp = "linear", pad = "clamp")
+  y_zero <- apply_motion(x, motion, interp = "linear", pad = "zero")
+
+  expect_gt(sum(y_clamp), sum(y_zero))
+  expect_equal(y_zero[1, 1, 1, 1], 0)
 })
 
 test_that("slice-aware packet interpolation changes output when offsets supplied", {

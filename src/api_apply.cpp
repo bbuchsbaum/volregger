@@ -176,17 +176,32 @@ inline double sample_cubic(const NumericVector& data,
   int y0 = static_cast<int>(std::floor(y)) - 1;
   int z0 = static_cast<int>(std::floor(z)) - 1;
 
+  int xs[4], ys[4], zs[4];
+  double wxs[4], wys[4], wzs[4];
+  for (int ii = 0; ii < 4; ++ii) {
+    xs[ii] = x0 + ii;
+    wxs[ii] = cubic_weight(x - xs[ii]);
+  }
+  for (int jj = 0; jj < 4; ++jj) {
+    ys[jj] = y0 + jj;
+    wys[jj] = cubic_weight(y - ys[jj]);
+  }
+  for (int kk = 0; kk < 4; ++kk) {
+    zs[kk] = z0 + kk;
+    wzs[kk] = cubic_weight(z - zs[kk]);
+  }
+
   double out = 0.0;
   double wsum = 0.0;
   for (int kk = 0; kk < 4; ++kk) {
-    int zk = z0 + kk;
-    double wz = cubic_weight(z - zk);
+    int zk = zs[kk];
+    double wz = wzs[kk];
     for (int jj = 0; jj < 4; ++jj) {
-      int yj = y0 + jj;
-      double wy = cubic_weight(y - yj);
+      int yj = ys[jj];
+      double wy = wys[jj];
       for (int ii = 0; ii < 4; ++ii) {
-        int xi = x0 + ii;
-        double wx = cubic_weight(x - xi);
+        int xi = xs[ii];
+        double wx = wxs[ii];
         double w = wx * wy * wz;
         out += w * sample_at(data, nx, ny, nz, nxyz, t, xi, yj, zk, pad_mode);
         wsum += w;
@@ -229,20 +244,36 @@ inline double sample_lanczos(const NumericVector& data,
   int x0 = static_cast<int>(std::floor(x)) - a + 1;
   int y0 = static_cast<int>(std::floor(y)) - a + 1;
   int z0 = static_cast<int>(std::floor(z)) - a + 1;
+  int width = 2 * a;
+
+  int xs[14], ys[14], zs[14];
+  double wxs[14], wys[14], wzs[14];
+  for (int ii = 0; ii < width; ++ii) {
+    xs[ii] = x0 + ii;
+    wxs[ii] = lanczos_weight(x - xs[ii], a);
+  }
+  for (int jj = 0; jj < width; ++jj) {
+    ys[jj] = y0 + jj;
+    wys[jj] = lanczos_weight(y - ys[jj], a);
+  }
+  for (int kk = 0; kk < width; ++kk) {
+    zs[kk] = z0 + kk;
+    wzs[kk] = lanczos_weight(z - zs[kk], a);
+  }
 
   double out = 0.0;
   double wsum = 0.0;
-  for (int kk = 0; kk < 2 * a; ++kk) {
-    int zk = z0 + kk;
-    double wz = lanczos_weight(z - zk, a);
+  for (int kk = 0; kk < width; ++kk) {
+    int zk = zs[kk];
+    double wz = wzs[kk];
     if (wz == 0.0) continue;
-    for (int jj = 0; jj < 2 * a; ++jj) {
-      int yj = y0 + jj;
-      double wy = lanczos_weight(y - yj, a);
+    for (int jj = 0; jj < width; ++jj) {
+      int yj = ys[jj];
+      double wy = wys[jj];
       if (wy == 0.0) continue;
-      for (int ii = 0; ii < 2 * a; ++ii) {
-        int xi = x0 + ii;
-        double wx = lanczos_weight(x - xi, a);
+      for (int ii = 0; ii < width; ++ii) {
+        int xi = xs[ii];
+        double wx = wxs[ii];
         if (wx == 0.0) continue;
         double w = wx * wy * wz;
         out += w * sample_at(data, nx, ny, nz, nxyz, t, xi, yj, zk, pad_mode);

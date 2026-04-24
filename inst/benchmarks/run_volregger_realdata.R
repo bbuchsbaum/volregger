@@ -10,6 +10,8 @@ defaults <- list(
   profile = "ic_nuisance",
   ref = "robust_mean",
   interp = NULL,
+  pad = "clamp",
+  edge_exclude_frac = NULL,
   nthreads = "1"
 )
 opts <- parse_benchmark_args(
@@ -35,13 +37,20 @@ if (!is.null(opts$mask)) {
   mask <- as.array(RNifti::readNifti(opts$mask)) > 0
 }
 
+profile_overrides <- list(nthreads = as.integer(opts$nthreads))
+if (!is.null(opts$edge_exclude_frac)) {
+  profile_overrides$edge_exclude_frac <- as.numeric(opts$edge_exclude_frac)
+}
 profile <- volreg_profile(
   opts$profile,
-  overrides = list(nthreads = as.integer(opts$nthreads))
+  overrides = profile_overrides
 )
 interp_final <- opts$interp %||% profile$control$interp_final %||% "bspline"
 if (!interp_final %in% c("bspline", "lanczos", "linear")) {
   stop("--interp must be one of: bspline, lanczos, linear", call. = FALSE)
+}
+if (!opts$pad %in% c("clamp", "zero")) {
+  stop("--pad must be one of: clamp, zero", call. = FALSE)
 }
 
 estimate_timing <- time_expr(
@@ -77,6 +86,7 @@ apply_timing <- time_expr(
     x = x,
     motion = par_apply,
     interp = interp_final,
+    pad = opts$pad,
     slice_times = if (identical(profile$engine, "rigid_spline")) NULL else NULL,
     mb_groups = if (identical(profile$engine, "rigid_spline")) NULL else NULL,
     nthreads = as.integer(profile$control$nthreads)
@@ -147,6 +157,8 @@ write.csv(
     ref = opts$ref,
     engine = profile$engine,
     interp = interp_final,
+    pad = opts$pad,
+    edge_exclude_frac = profile$control$edge_exclude_frac %||% 0,
     components = paste(profile$components, collapse = "+"),
     with_report = isTRUE(opts$with_report),
     stringsAsFactors = FALSE

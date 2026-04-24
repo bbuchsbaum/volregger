@@ -3,6 +3,7 @@
 #' @param x 4D image-like input.
 #' @param motion nt x 6 motion matrix.
 #' @param interp Final interpolation method.
+#' @param pad Boundary handling for samples outside the input field of view.
 #' @param slice_times Optional slice timing offsets.
 #' @param mb_groups Optional multiband group IDs.
 #' @param nthreads Number of threads.
@@ -12,10 +13,12 @@ apply_motion <- function(
     x,
     motion,
     interp = c("bspline", "lanczos", "linear"),
+    pad = c("clamp", "zero"),
     slice_times = NULL,
     mb_groups = NULL,
     nthreads = 1L) {
   interp <- match.arg(interp)
+  pad <- match.arg(pad)
   motion <- .require_motion_matrix(motion)
   inp <- .as_volreg_input(x, mask = NULL, slice_times = slice_times, mb_groups = mb_groups)
 
@@ -27,7 +30,7 @@ apply_motion <- function(
     slice_times = inp$slice_times,
     mb_groups = inp$mb_groups,
     interp = interp,
-    pad_mode = 0L,
+    pad_mode = if (identical(pad, "zero")) 1L else 0L,
     nthreads = as.integer(nthreads)
   )
 

@@ -5,7 +5,7 @@
 \title{Named estimator profiles for ablation and benchmark work}
 \usage{
 volreg_profile(
-  name = c("dense_baseline", "ic_stencil", "ic_whiten", "ic_nuisance",
+  name = c("dense_baseline", "fast_native", "ic_stencil", "ic_whiten", "ic_nuisance",
     "ic_nuisance_full", "slice_spline"),
   control = volreg_control(),
   overrides = list()

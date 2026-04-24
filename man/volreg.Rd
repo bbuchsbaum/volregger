@@ -14,6 +14,7 @@ volreg(
   mb_groups = NULL,
   resample = TRUE,
   interp_final = c("bspline", "lanczos", "linear"),
+  pad_final = c("clamp", "zero"),
   qc = TRUE,
   control = volreg_control(),
   verbose = FALSE
@@ -37,6 +38,8 @@ volreg(
 \item{resample}{If TRUE, apply estimated motion to generate corrected output.}
 
 \item{interp_final}{Final interpolation method.}
+
+\item{pad_final}{Boundary handling for final resampling.}
 
 \item{qc}{If TRUE, compute QC metrics.}
 

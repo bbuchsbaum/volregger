@@ -8,6 +8,7 @@ apply_motion(
   x,
   motion,
   interp = c("bspline", "lanczos", "linear"),
+  pad = c("clamp", "zero"),
   slice_times = NULL,
   mb_groups = NULL,
   nthreads = 1L
@@ -19,6 +20,8 @@ apply_motion(
 \item{motion}{nt x 6 motion matrix.}
 
 \item{interp}{Final interpolation method.}
+
+\item{pad}{Boundary handling for samples outside the input field of view.}
 
 \item{slice_times}{Optional slice timing offsets.}
 

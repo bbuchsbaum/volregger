@@ -9,6 +9,7 @@
 #' @param mb_groups Optional multiband group IDs.
 #' @param resample If TRUE, apply estimated motion to generate corrected output.
 #' @param interp_final Final interpolation method.
+#' @param pad_final Boundary handling for final resampling.
 #' @param qc If TRUE, compute QC metrics.
 #' @param control Control list.
 #' @param verbose Verbose logging.
@@ -24,12 +25,14 @@ volreg <- function(
     mb_groups = NULL,
     resample = TRUE,
     interp_final = c("bspline", "lanczos", "linear"),
+    pad_final = c("clamp", "zero"),
     qc = TRUE,
     control = volreg_control(),
     verbose = FALSE) {
   ref <- match.arg(ref)
   engine <- match.arg(engine)
   interp_final <- match.arg(interp_final)
+  pad_final <- match.arg(pad_final)
 
   inp <- .as_volreg_input(
     x = x,
@@ -75,7 +78,7 @@ volreg <- function(
       slice_times = if (identical(engine, "rigid_spline")) inp$slice_times else NULL,
       mb_groups = if (identical(engine, "rigid_spline")) inp$mb_groups else NULL,
       interp = interp_final,
-      pad_mode = 0L,
+      pad_mode = if (identical(pad_final, "zero")) 1L else 0L,
       nthreads = as.integer(ctl$nthreads)
     )
     corrected <- .rebuild_like(x, arr_corr)

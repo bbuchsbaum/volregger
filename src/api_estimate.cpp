@@ -308,6 +308,44 @@ LogicalVector auto_mask_from_template(const NumericVector& tmpl, int nxyz) {
   return m;
 }
 
+LogicalVector exclude_mask_edges(const LogicalVector& mask,
+                                 int nx,
+                                 int ny,
+                                 int nz,
+                                 double edge_frac,
+                                 int edge_vox) {
+  int ex = std::max(edge_vox, static_cast<int>(std::round(edge_frac * nx)));
+  int ey = std::max(edge_vox, static_cast<int>(std::round(edge_frac * ny)));
+  int ez = std::max(edge_vox, static_cast<int>(std::round(edge_frac * nz)));
+  ex = clamp_int(ex, 0, std::max(0, (nx - 1) / 2));
+  ey = clamp_int(ey, 0, std::max(0, (ny - 1) / 2));
+  ez = clamp_int(ez, 0, std::max(0, (nz - 1) / 2));
+  if (ex == 0 && ey == 0 && ez == 0) {
+    return mask;
+  }
+
+  LogicalVector out = clone(mask);
+  int kept = 0;
+  for (int k = 0; k < nz; ++k) {
+    for (int j = 0; j < ny; ++j) {
+      for (int i = 0; i < nx; ++i) {
+        int v = i + nx * (j + ny * k);
+        if (i < ex || i >= nx - ex || j < ey || j >= ny - ey || k < ez || k >= nz - ez) {
+          out[v] = false;
+        }
+        if (out[v] == TRUE) {
+          ++kept;
+        }
+      }
+    }
+  }
+
+  if (kept == 0) {
+    stop("edge exclusion removed all fitting voxels");
+  }
+  return out;
+}
+
 NumericMatrix identity_mats(int nt) {
   NumericMatrix mats(16, nt);
   for (int t = 0; t < nt; ++t) {
@@ -2257,6 +2295,8 @@ List cpp_volreg_estimate(
   int stencil_by = get_int_ctrl(control, "stencil_by", 4);
   int stencil_bz = get_int_ctrl(control, "stencil_bz", 2);
   double stencil_gamma = get_dbl_ctrl(control, "stencil_gamma", 0.5);
+  double edge_exclude_frac = get_dbl_ctrl(control, "edge_exclude_frac", 0.0);
+  int edge_exclude_vox = get_int_ctrl(control, "edge_exclude_vox", 0);
   int nthreads = std::max(1, get_int_ctrl(control, "nthreads", 1));
 
   NumericMatrix par(nt, 6);
@@ -2271,6 +2311,7 @@ List cpp_volreg_estimate(
   if (mask.isNull()) {
     fit_mask = auto_mask_from_template(template_vol, nxyz);
   }
+  fit_mask = exclude_mask_edges(fit_mask, nx, ny, nz, edge_exclude_frac, edge_exclude_vox);
   std::vector<int> samples = make_sample_points(fit_mask, nxyz, n_samples);
   if (samples.empty()) {
     stop("mask produced zero fitting samples");
