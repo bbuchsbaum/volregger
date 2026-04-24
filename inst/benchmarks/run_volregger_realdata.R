@@ -9,6 +9,7 @@ defaults <- list(
   out_dir = NULL,
   profile = "ic_nuisance",
   ref = "robust_mean",
+  interp = NULL,
   nthreads = "1"
 )
 opts <- parse_benchmark_args(
@@ -20,7 +21,6 @@ opts <- parse_benchmark_args(
 if (is.null(opts$input) || is.null(opts$out_dir)) {
   stop("--input and --out-dir are required", call. = FALSE)
 }
-
 dir.create(opts$out_dir, recursive = TRUE, showWarnings = FALSE)
 
 img <- RNifti::readNifti(opts$input)
@@ -39,6 +39,10 @@ profile <- volreg_profile(
   opts$profile,
   overrides = list(nthreads = as.integer(opts$nthreads))
 )
+interp_final <- opts$interp %||% profile$control$interp_final %||% "bspline"
+if (!interp_final %in% c("bspline", "lanczos", "linear")) {
+  stop("--interp must be one of: bspline, lanczos, linear", call. = FALSE)
+}
 
 estimate_timing <- time_expr(
   estimate_motion(
@@ -72,7 +76,7 @@ apply_timing <- time_expr(
   apply_motion(
     x = x,
     motion = par_apply,
-    interp = "bspline",
+    interp = interp_final,
     slice_times = if (identical(profile$engine, "rigid_spline")) NULL else NULL,
     mb_groups = if (identical(profile$engine, "rigid_spline")) NULL else NULL,
     nthreads = as.integer(profile$control$nthreads)
@@ -142,6 +146,7 @@ write.csv(
     profile = profile$name,
     ref = opts$ref,
     engine = profile$engine,
+    interp = interp_final,
     components = paste(profile$components, collapse = "+"),
     with_report = isTRUE(opts$with_report),
     stringsAsFactors = FALSE

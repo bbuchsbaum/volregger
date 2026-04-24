@@ -122,7 +122,8 @@ test_that("real-data benchmark truth metrics expose a broad scorecard", {
     "nrmse_to_truth",
     "residual_dvars_to_truth",
     "temporal_corr_to_truth",
-    "edge_ratio_to_truth"
+    "edge_ratio_to_truth",
+    "truth_image_fidelity_loss"
   )
 
   expect_true(all(expected %in% names(metrics)))
@@ -135,6 +136,7 @@ test_that("real-data benchmark truth metrics expose a broad scorecard", {
   expect_equal(metrics$rel_frob_p95, 0, tolerance = 1e-12)
   expect_equal(metrics$temporal_corr_to_truth, 1, tolerance = 1e-12)
   expect_equal(metrics$edge_ratio_to_truth, 1, tolerance = 1e-12)
+  expect_equal(metrics$truth_image_fidelity_loss, 0, tolerance = 1e-12)
 })
 
 test_that("real-data benchmark scorecard ranks truth metrics by direction", {

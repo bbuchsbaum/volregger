@@ -17,6 +17,7 @@ defaults <- list(
   volreg_profile = NULL,
   volreg_profile_native = "fast_native",
   volreg_profile_truth = "ic_nuisance",
+  volreg_interp = NULL,
   volreg_ref = "robust_mean",
   nifreeze_model = "mean",
   afni_image = "afni/afni_make_build",
@@ -201,11 +202,13 @@ run_one <- function(method, scenario_name) {
   stage_path <- file.path(method_dir, "stage_times.csv")
 
   if (identical(method, "volregger")) {
-    volreg_profile <- opts$volreg_profile %||% if (identical(dataset_mode, "native")) {
+    volreg_profile_name <- opts$volreg_profile %||% if (identical(dataset_mode, "native")) {
       opts$volreg_profile_native
     } else {
       opts$volreg_profile_truth
     }
+    volreg_profile_spec <- volreg_profile(volreg_profile_name)
+    volreg_interp <- opts$volreg_interp %||% volreg_profile_spec$control$interp_final %||% "bspline"
     prof <- run_profiled_command(
       command = file.path(R.home("bin"), "Rscript"),
       args = c(
@@ -213,8 +216,9 @@ run_one <- function(method, scenario_name) {
         "--input", input_path,
         "--mask", mask_path,
         "--out-dir", method_dir,
-        "--profile", volreg_profile,
+        "--profile", volreg_profile_name,
         "--ref", opts$volreg_ref,
+        "--interp", volreg_interp,
         "--nthreads", opts$nthreads
       ),
       stdout_path = stdout_path,
@@ -222,7 +226,7 @@ run_one <- function(method, scenario_name) {
     )
     meta <- data.frame(
       method = method,
-      method_model = paste(volreg_profile, opts$volreg_ref, sep = ":"),
+      method_model = paste(volreg_profile_name, opts$volreg_ref, volreg_interp, sep = ":"),
       stringsAsFactors = FALSE
     )
   } else if (identical(method, "nifreeze")) {
@@ -567,6 +571,7 @@ print(raw[, c(
   "mae_to_truth",
   "nrmse_to_truth",
   "temporal_corr_to_truth",
+  "truth_image_fidelity_loss",
   "tsnr_ratio",
   "blur_proxy_ratio"
 )])
