@@ -2359,6 +2359,10 @@ List cpp_volreg_estimate(
   if (control.containsElementNamed("adaptive_huber")) {
     adaptive_huber = as<bool>(control["adaptive_huber"]);
   }
+  bool adaptive_huber_guard = false;
+  if (control.containsElementNamed("adaptive_huber_guard")) {
+    adaptive_huber_guard = as<bool>(control["adaptive_huber_guard"]);
+  }
   double lambda0 = get_dbl_ctrl(control, "lambda0", 1e-2);
   double tol_step = get_dbl_ctrl(control, "tol_step", 1e-5);
   double tol_cost = get_dbl_ctrl(control, "tol_cost", 1e-6);
@@ -2529,33 +2533,79 @@ List cpp_volreg_estimate(
 
     auto fit_one = [&](int frame_t, const Pose6& init_pose) {
       if (use_ic_local) {
-        FrameFit fit_ic = optimize_frame_pose_ic(data,
-                                                 nx,
-                                                 ny,
-                                                 nz,
-                                                 nxyz,
-                                                 frame_t,
-                                                 pixdim,
-                                                 stencil,
-                                                 init_pose,
-                                                 max_iter,
-                                                 lambda0,
-                                                 tol_step,
-                                                 tol_cost,
-                                                 huber_k,
-                                                 adaptive_huber,
-                                                 n_restarts,
-                                                 use_overlap_taper,
-                                                 capture_boost,
-                                                 capture_trans_mm,
-                                                 capture_rot_deg,
-                                                 capture_topk,
-                                                 use_whiten_local,
-                                                 use_whiten_local ? wm.LinvT : nullptr,
-                                                 use_nuisance_marginalization,
-                                                 nuisance_dim_local,
-                                                 nuisance_ridge,
-                                                 nthreads);
+        auto run_ic = [&](bool use_adaptive) {
+          return optimize_frame_pose_ic(data,
+                                        nx,
+                                        ny,
+                                        nz,
+                                        nxyz,
+                                        frame_t,
+                                        pixdim,
+                                        stencil,
+                                        init_pose,
+                                        max_iter,
+                                        lambda0,
+                                        tol_step,
+                                        tol_cost,
+                                        huber_k,
+                                        use_adaptive,
+                                        n_restarts,
+                                        use_overlap_taper,
+                                        capture_boost,
+                                        capture_trans_mm,
+                                        capture_rot_deg,
+                                        capture_topk,
+                                        use_whiten_local,
+                                        use_whiten_local ? wm.LinvT : nullptr,
+                                        use_nuisance_marginalization,
+                                        nuisance_dim_local,
+                                        nuisance_ridge,
+                                        nthreads);
+        };
+        auto fixed_objective = [&](const Pose6& pose) {
+          if (use_nuisance_marginalization && nuisance_dim_local > 0) {
+            return evaluate_cost_stencil_nuisance(data,
+                                                  nx,
+                                                  ny,
+                                                  nz,
+                                                  nxyz,
+                                                  frame_t,
+                                                  pixdim,
+                                                  stencil,
+                                                  pose,
+                                                  huber_k,
+                                                  use_overlap_taper,
+                                                  nuisance_dim_local,
+                                                  nuisance_ridge,
+                                                  nthreads)
+                .cost;
+          }
+          return evaluate_cost_stencil(data,
+                                       nx,
+                                       ny,
+                                       nz,
+                                       nxyz,
+                                       frame_t,
+                                       pixdim,
+                                       stencil,
+                                       pose,
+                                       huber_k,
+                                       use_overlap_taper,
+                                       nthreads)
+              .cost;
+        };
+
+        FrameFit fit_ic = run_ic(adaptive_huber);
+        if (adaptive_huber && adaptive_huber_guard) {
+          FrameFit fit_fixed = run_ic(false);
+          double c_adaptive = fixed_objective(fit_ic.pose);
+          double c_fixed = fixed_objective(fit_fixed.pose);
+          if (c_fixed <= c_adaptive) {
+            fit_ic = fit_fixed;
+          } else {
+            fit_ic.cost_final = c_adaptive;
+          }
+        }
         if (use_dense_polish && polish_iter > 0 && !polish_samples.empty()) {
           FrameFit fit_polish = optimize_frame_pose(data,
                                                     template_vol,

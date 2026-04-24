@@ -9,6 +9,7 @@ volreg_control <- function() {
     n_samples = c(12000L, 24000L, 40000L),
     huber_k = 1.5,
     adaptive_huber = FALSE,
+    adaptive_huber_guard = FALSE,
     lambda0 = 1e-2,
     tol_step = 1e-5,
     tol_cost = 1e-6,
