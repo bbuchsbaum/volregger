@@ -100,6 +100,7 @@ test_that("external truth benchmark keeps volregger ahead of nifreeze on low-mot
   high_value <- scorecard[
     scorecard$scenario == "low_motion" &
       scorecard$baseline == "nifreeze" &
+      scorecard$claim_metric &
       scorecard$family %in% c("truth_displacement", "truth_matrix"),
   ]
   expect_gt(nrow(high_value), 0)

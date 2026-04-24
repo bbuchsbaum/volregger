@@ -400,10 +400,13 @@ utils::write.csv(raw, raw_csv, row.names = FALSE)
 
 scorecard <- make_benchmark_scorecard(raw)
 scorecard_summary <- summarize_benchmark_scorecard(scorecard)
+scorecard_claim_summary <- summarize_benchmark_scorecard(scorecard, claim_only = TRUE)
 scorecard_csv <- file.path(out_dir, "benchmark_vs_nifreeze_realdata_scorecard.csv")
 scorecard_summary_csv <- file.path(out_dir, "benchmark_vs_nifreeze_realdata_scorecard_summary.csv")
+scorecard_claim_summary_csv <- file.path(out_dir, "benchmark_vs_nifreeze_realdata_claim_summary.csv")
 utils::write.csv(scorecard, scorecard_csv, row.names = FALSE)
 utils::write.csv(scorecard_summary, scorecard_summary_csv, row.names = FALSE)
+utils::write.csv(scorecard_claim_summary, scorecard_claim_summary_csv, row.names = FALSE)
 
 safe_ratio <- function(x, y) {
   if (!is.finite(x) || !is.finite(y)) {
@@ -543,6 +546,7 @@ cat("Saved:\n")
 cat(" -", raw_csv, "\n")
 cat(" -", scorecard_csv, "\n")
 cat(" -", scorecard_summary_csv, "\n")
+cat(" -", scorecard_claim_summary_csv, "\n")
 cat(" -", paired_csv, "\n")
 cat(" -", solution_summary_csv, "\n")
 cat(" -", solution_frames_csv, "\n")
@@ -570,4 +574,9 @@ print(raw[, c(
 if (nrow(scorecard_summary)) {
   cat("\nScorecard summary:\n")
   print(scorecard_summary)
+}
+
+if (nrow(scorecard_claim_summary)) {
+  cat("\nClaim-metric summary:\n")
+  print(scorecard_claim_summary)
 }

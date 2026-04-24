@@ -500,61 +500,82 @@ empty_benchmark_metrics <- function() {
 }
 
 benchmark_scorecard_specs <- function() {
+  metrics <- c(
+    "elapsed_sec",
+    "estimate_sec",
+    "temp_bytes_written",
+    "disp_median",
+    "disp_p95",
+    "disp_max",
+    "fd_error",
+    "trans_rmse",
+    "rot_rmse",
+    "trans_abs_median",
+    "trans_abs_p95",
+    "tx_mae",
+    "ty_mae",
+    "tz_mae",
+    "rot_abs_deg_median",
+    "rot_abs_deg_p95",
+    "rx_mae_deg",
+    "ry_mae_deg",
+    "rz_mae_deg",
+    "rel_frob_median",
+    "rel_frob_p95",
+    "rel_rot_deg_median",
+    "rel_rot_deg_p95",
+    "affine_det_error_max",
+    "mse_to_truth",
+    "mae_to_truth",
+    "nrmse_to_truth",
+    "residual_dvars_to_truth",
+    "dvars_after_mean",
+    "dvars_after_p95",
+    "dvars_ratio",
+    "corr_to_truth",
+    "temporal_corr_to_truth",
+    "tsnr_ratio",
+    "edge_ratio_to_truth"
+  )
+  family <- c(
+    rep("runtime", 3),
+    rep("truth_displacement", 4),
+    rep("truth_pose", 12),
+    rep("truth_matrix", 5),
+    rep("truth_image", 4),
+    rep("qc", 3),
+    rep("truth_image", 2),
+    "qc",
+    "truth_image"
+  )
+  role <- c(
+    "claim_efficiency",
+    "claim_efficiency",
+    "diagnostic_resource",
+    rep("claim_truth", 8),
+    rep("diagnostic_pose_axis", 3),
+    rep("claim_truth", 2),
+    rep("diagnostic_pose_axis", 3),
+    rep("claim_truth", 5),
+    rep("claim_truth", 3),
+    "diagnostic_smoothing",
+    rep("diagnostic_smoothing", 3),
+    rep("claim_truth", 2),
+    "claim_qc",
+    "claim_truth"
+  )
+
   data.frame(
-    metric = c(
-      "elapsed_sec",
-      "estimate_sec",
-      "temp_bytes_written",
-      "disp_median",
-      "disp_p95",
-      "disp_max",
-      "fd_error",
-      "trans_rmse",
-      "rot_rmse",
-      "trans_abs_median",
-      "trans_abs_p95",
-      "tx_mae",
-      "ty_mae",
-      "tz_mae",
-      "rot_abs_deg_median",
-      "rot_abs_deg_p95",
-      "rx_mae_deg",
-      "ry_mae_deg",
-      "rz_mae_deg",
-      "rel_frob_median",
-      "rel_frob_p95",
-      "rel_rot_deg_median",
-      "rel_rot_deg_p95",
-      "affine_det_error_max",
-      "mse_to_truth",
-      "mae_to_truth",
-      "nrmse_to_truth",
-      "residual_dvars_to_truth",
-      "dvars_after_mean",
-      "dvars_after_p95",
-      "dvars_ratio",
-      "corr_to_truth",
-      "temporal_corr_to_truth",
-      "tsnr_ratio",
-      "edge_ratio_to_truth"
-    ),
+    metric = metrics,
     direction = c(
       rep("lower", 31),
       rep("higher", 3),
       "target"
     ),
     target = c(rep(NA_real_, 34), 1),
-    family = c(
-      rep("runtime", 3),
-      rep("truth_displacement", 4),
-      rep("truth_pose", 12),
-      rep("truth_matrix", 5),
-      rep("truth_image", 4),
-      rep("qc", 3),
-      rep("truth_image", 2),
-      "qc",
-      "truth_image"
-    ),
+    family = family,
+    role = role,
+    claim_metric = startsWith(role, "claim_"),
     stringsAsFactors = FALSE
   )
 }
@@ -633,6 +654,8 @@ make_benchmark_scorecard <- function(raw, primary_method = "volregger", truth_on
           baseline = baseline$method,
           metric = metric,
           family = specs$family[spec_idx],
+          role = specs$role[spec_idx],
+          claim_metric = specs$claim_metric[spec_idx],
           direction = specs$direction[spec_idx],
           target = specs$target[spec_idx],
           primary_value = primary[[metric]],
@@ -655,9 +678,15 @@ make_benchmark_scorecard <- function(raw, primary_method = "volregger", truth_on
   }
 }
 
-summarize_benchmark_scorecard <- function(scorecard) {
+summarize_benchmark_scorecard <- function(scorecard, claim_only = FALSE) {
   if (!nrow(scorecard)) {
     return(data.frame())
+  }
+  if (isTRUE(claim_only)) {
+    scorecard <- scorecard[scorecard$claim_metric %in% TRUE, , drop = FALSE]
+    if (!nrow(scorecard)) {
+      return(data.frame())
+    }
   }
   aggregate(
     x = list(
@@ -670,7 +699,9 @@ summarize_benchmark_scorecard <- function(scorecard) {
       scenario = scorecard$scenario,
       dataset_mode = scorecard$dataset_mode,
       baseline = scorecard$baseline,
-      family = scorecard$family
+      family = scorecard$family,
+      role = scorecard$role,
+      claim_metric = scorecard$claim_metric
     ),
     FUN = sum,
     na.rm = TRUE
