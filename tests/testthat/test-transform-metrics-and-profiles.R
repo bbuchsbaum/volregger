@@ -67,6 +67,19 @@ test_that("fast_native profile targets the native speed frontier", {
   expect_equal(prof$control$capture_topk, 4L)
 })
 
+test_that("fast_fmri profile adds fMRI-specific edge and template safeguards", {
+  prof <- volreg_profile("fast_fmri")
+
+  expect_s3_class(prof, "volreg_profile")
+  expect_equal(prof$engine, "rigid_robust")
+  expect_true(all(c("fast_native", "edge_exclude", "valid_template_refresh") %in% prof$components))
+  expect_true(isTRUE(prof$control$use_ic_stencil))
+  expect_true(isTRUE(prof$control$whiten_modes))
+  expect_equal(prof$control$stencil_n, 1000L)
+  expect_equal(prof$control$edge_exclude_frac, 0.05)
+  expect_true(isTRUE(prof$control$template_refresh_valid_only))
+})
+
 test_that("dense-polish profile keeps IC setup and enables bounded dense polish", {
   prof <- volreg_profile("ic_nuisance_polish")
 

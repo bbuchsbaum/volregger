@@ -10,6 +10,7 @@ volreg_profile <- function(
     name = c(
       "dense_baseline",
       "fast_native",
+      "fast_fmri",
       "ic_stencil",
       "ic_whiten",
       "ic_nuisance",
@@ -47,6 +48,21 @@ volreg_profile <- function(
         stencil_n = 1000L,
         capture_topk = 4L,
         max_iter = c(30L, 20L, 12L)
+      )
+    ),
+    fast_fmri = list(
+      engine = "rigid_robust",
+      components = c("capture_boost", "ic_stencil", "whiten", "fast_native", "edge_exclude", "valid_template_refresh"),
+      control = list(
+        use_ic_stencil = TRUE,
+        whiten_modes = TRUE,
+        use_nuisance_marginalization = FALSE,
+        nuisance_include_template = FALSE,
+        stencil_n = 1000L,
+        capture_topk = 4L,
+        max_iter = c(30L, 20L, 12L),
+        edge_exclude_frac = 0.05,
+        template_refresh_valid_only = TRUE
       )
     ),
     ic_stencil = list(
