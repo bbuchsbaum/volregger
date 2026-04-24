@@ -16,7 +16,7 @@ defaults <- list(
   nifreeze_docker_runner = file.path("inst", "benchmarks", "run_nifreeze_realdata_docker.sh"),
   volreg_profile = NULL,
   volreg_profile_native = "fast_native",
-  volreg_profile_truth = "ic_nuisance",
+  volreg_profile_truth = "fast_native",
   volreg_interp = NULL,
   volreg_pad = "clamp",
   volreg_zpad = "0",

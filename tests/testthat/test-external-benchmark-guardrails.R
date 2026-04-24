@@ -90,7 +90,7 @@ test_that("external truth benchmark keeps volregger ahead of nifreeze on low-mot
     skip("truth benchmark backends unavailable in this environment")
   }
 
-  expect_match(vol$method_model, "^ic_nuisance:")
+  expect_match(vol$method_model, "^fast_native:")
   expect_lt(vol$disp_p95, nif$disp_p95)
   expect_lt(vol$fd_error, nif$fd_error)
 
