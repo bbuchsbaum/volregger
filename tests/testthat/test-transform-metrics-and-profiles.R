@@ -67,6 +67,27 @@ test_that("fast_native profile targets the native speed frontier", {
   expect_equal(prof$control$capture_topk, 4L)
 })
 
+test_that("dense-polish profile keeps IC setup and enables bounded dense polish", {
+  prof <- volreg_profile("ic_nuisance_polish")
+
+  expect_s3_class(prof, "volreg_profile")
+  expect_true(all(c("ic_stencil", "whiten", "nuisance", "dense_polish") %in% prof$components))
+  expect_true(isTRUE(prof$control$use_ic_stencil))
+  expect_true(isTRUE(prof$control$use_dense_polish))
+  expect_equal(prof$control$polish_iter, 5L)
+  expect_equal(prof$control$polish_n_samples, 12000L)
+})
+
+test_that("adaptive-Huber profile keeps IC setup and scales robust threshold", {
+  prof <- volreg_profile("ic_nuisance_adaptive")
+
+  expect_s3_class(prof, "volreg_profile")
+  expect_true(all(c("ic_stencil", "whiten", "nuisance", "adaptive_huber") %in% prof$components))
+  expect_true(isTRUE(prof$control$use_ic_stencil))
+  expect_true(isTRUE(prof$control$adaptive_huber))
+  expect_false(isTRUE(prof$control$use_dense_polish))
+})
+
 test_that("fit summaries and tabular output expose richer QC fields", {
   set.seed(200)
   x0 <- array(rnorm(8 * 8 * 4), dim = c(8, 8, 4))

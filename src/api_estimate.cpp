@@ -171,6 +171,35 @@ double quantile_inplace(std::vector<double>& x, double q) {
   return x[k];
 }
 
+double robust_sigma_from_residuals(std::vector<double>& residuals) {
+  if (residuals.empty()) {
+    return 1.0;
+  }
+
+  std::vector<double> med_vals = residuals;
+  double med = quantile_inplace(med_vals, 0.5);
+
+  std::vector<double> absdev;
+  absdev.reserve(residuals.size());
+  std::vector<double> absres;
+  absres.reserve(residuals.size());
+  for (size_t i = 0; i < residuals.size(); ++i) {
+    absdev.push_back(std::abs(residuals[i] - med));
+    absres.push_back(std::abs(residuals[i]));
+  }
+
+  double mad = quantile_inplace(absdev, 0.5);
+  double sigma = 1.4826 * mad;
+  if (!R_finite(sigma) || sigma <= 1e-8) {
+    double mar = quantile_inplace(absres, 0.5);
+    sigma = 1.4826 * mar;
+  }
+  if (!R_finite(sigma) || sigma <= 1e-8) {
+    sigma = 1.0;
+  }
+  return sigma;
+}
+
 std::string get_str_ctrl(const List& control,
                          const std::string& name,
                          const std::string& default_value) {
@@ -534,6 +563,38 @@ CostResult evaluate_cost(const NumericVector& data,
     c = 1e12;
   }
   return CostResult{c, overlap};
+}
+
+double estimate_residual_sigma_dense(const NumericVector& data,
+                                     const NumericVector& tmpl,
+                                     int nx,
+                                     int ny,
+                                     int nz,
+                                     int nxyz,
+                                     int t,
+                                     const NumericVector& pixdim,
+                                     const std::vector<int>& sample_points,
+                                     const Pose6& pose) {
+  std::vector<double> residuals;
+  residuals.reserve(sample_points.size());
+  double src[3];
+
+  for (size_t s = 0; s < sample_points.size(); ++s) {
+    int v = sample_points[s];
+    int i = v % nx;
+    int j = (v / nx) % ny;
+    int k = v / (nx * ny);
+
+    bool in_bounds = false;
+    fixed_to_moving_vox(i, j, k, nx, ny, nz, pixdim, pose, src, &in_bounds);
+    if (!in_bounds) {
+      continue;
+    }
+    double mv = sample_trilinear_frame(data, nx, ny, nz, nxyz, t, src[0], src[1], src[2]);
+    residuals.push_back(mv - tmpl[v]);
+  }
+
+  return robust_sigma_from_residuals(residuals);
 }
 
 std::vector<int> make_sample_points(const LogicalVector& mask, int nxyz, int target) {
@@ -1028,6 +1089,33 @@ CostResult evaluate_cost_stencil(const NumericVector& data,
     c = 1e12;
   }
   return CostResult{c, overlap};
+}
+
+double estimate_residual_sigma_stencil(const NumericVector& data,
+                                       int nx,
+                                       int ny,
+                                       int nz,
+                                       int nxyz,
+                                       int t,
+                                       const NumericVector& pixdim,
+                                       const std::vector<StencilPoint>& stencil,
+                                       const Pose6& pose) {
+  std::vector<double> residuals;
+  residuals.reserve(stencil.size());
+  double src[3];
+
+  for (size_t s = 0; s < stencil.size(); ++s) {
+    const StencilPoint& p = stencil[s];
+    bool in_bounds = false;
+    fixed_to_moving_vox(p.i, p.j, p.k, nx, ny, nz, pixdim, pose, src, &in_bounds);
+    if (!in_bounds) {
+      continue;
+    }
+    double mv = sample_trilinear_frame(data, nx, ny, nz, nxyz, t, src[0], src[1], src[2]);
+    residuals.push_back(mv - p.tval);
+  }
+
+  return robust_sigma_from_residuals(residuals);
 }
 
 int prepare_nuisance_basis(std::vector<StencilPoint>* stencil,
@@ -1587,6 +1675,7 @@ FrameFit optimize_frame_pose_ic(const NumericVector& data,
                                 double tol_step,
                                 double tol_cost,
                                 double huber_k,
+                                bool adaptive_huber,
                                 int n_restarts,
                                 bool use_overlap_taper,
                                 bool capture_boost,
@@ -1600,6 +1689,12 @@ FrameFit optimize_frame_pose_ic(const NumericVector& data,
                                 double nuisance_ridge,
                                 int nthreads) {
   bool use_nuisance = use_nuisance_marginalization && nuisance_dim > 0;
+  double huber_eff = huber_k;
+  if (adaptive_huber) {
+    double sigma = estimate_residual_sigma_stencil(
+        data, nx, ny, nz, nxyz, t, pixdim, stencil, init_pose);
+    huber_eff = std::max(1e-6, huber_k * sigma);
+  }
   auto eval_pose = [&](const Pose6& pose) {
     if (use_nuisance) {
       return evaluate_cost_stencil_nuisance(data,
@@ -1611,14 +1706,14 @@ FrameFit optimize_frame_pose_ic(const NumericVector& data,
                                             pixdim,
                                             stencil,
                                             pose,
-                                            huber_k,
+                                            huber_eff,
                                             use_overlap_taper,
                                             nuisance_dim,
                                             nuisance_ridge,
                                             nthreads);
     }
     return evaluate_cost_stencil(
-        data, nx, ny, nz, nxyz, t, pixdim, stencil, pose, huber_k, use_overlap_taper, nthreads);
+        data, nx, ny, nz, nxyz, t, pixdim, stencil, pose, huber_eff, use_overlap_taper, nthreads);
   };
 
   std::vector<Pose6> seeds;
@@ -1692,7 +1787,7 @@ FrameFit optimize_frame_pose_ic(const NumericVector& data,
           double mv = sample_trilinear_frame(data, nx, ny, nz, nxyz, t, src[0], src[1], src[2]);
           double r = mv - p.tval;
           double ar = std::abs(r);
-          double wr = (ar <= huber_k) ? 1.0 : (huber_k / (ar + 1e-12));
+          double wr = (ar <= huber_eff) ? 1.0 : (huber_eff / (ar + 1e-12));
           double wt = p.w0 * wr;
           valid_w_thread += wt;
           const double* jac = use_whiten_modes ? p.jwhite : p.jcol;
@@ -1946,6 +2041,7 @@ FrameFit optimize_frame_pose(const NumericVector& data,
                              double tol_step,
                              double tol_cost,
                              double huber_k,
+                             bool adaptive_huber,
                              int n_restarts,
                              bool use_overlap_taper,
                              bool capture_boost,
@@ -1986,9 +2082,15 @@ FrameFit optimize_frame_pose(const NumericVector& data,
 
   for (size_t seed_idx = 0; seed_idx < seeds.size(); ++seed_idx) {
     Pose6 cur = seeds[seed_idx];
+    double huber_eff = huber_k;
+    if (adaptive_huber) {
+      double sigma = estimate_residual_sigma_dense(
+          data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, cur);
+      huber_eff = std::max(1e-6, huber_k * sigma);
+    }
     double lambda = lambda0;
     CostResult eval0 =
-        evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, cur, huber_k, use_overlap_taper);
+        evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, cur, huber_eff, use_overlap_taper);
     double c_init = eval0.cost;
     double c_prev = c_init;
     int used_iters = 0;
@@ -2022,10 +2124,10 @@ FrameFit optimize_frame_pose(const NumericVector& data,
         Pose6 p_minus = set_param(cur, d, v - h[d]);
 
         double cp =
-            evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, p_plus, huber_k, use_overlap_taper)
+            evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, p_plus, huber_eff, use_overlap_taper)
                 .cost;
         double cm =
-            evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, p_minus, huber_k, use_overlap_taper)
+            evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, p_minus, huber_eff, use_overlap_taper)
                 .cost;
 
         grad[d] = (cp - cm) / (2.0 * h[d]);
@@ -2052,7 +2154,7 @@ FrameFit optimize_frame_pose(const NumericVector& data,
 
       for (int ls = 0; ls < 8; ++ls) {
         Pose6 cand = add_pose(cur, scale_pose(delta, alpha));
-        c_new = evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, cand, huber_k, use_overlap_taper)
+        c_new = evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, cand, huber_eff, use_overlap_taper)
                     .cost;
         if (c_new < c_prev) {
           cur = cand;
@@ -2076,7 +2178,7 @@ FrameFit optimize_frame_pose(const NumericVector& data,
     }
 
     CostResult evalf =
-        evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, cur, huber_k, use_overlap_taper);
+        evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, cur, huber_eff, use_overlap_taper);
 
     if (evalf.cost < best_c_final) {
       best_pose = cur;
@@ -2253,6 +2355,10 @@ List cpp_volreg_estimate(
   int n_samples = get_int_ctrl(control, "n_samples", 20000);
   int n_restarts = get_int_ctrl(control, "n_restarts", 0);
   double huber_k = get_dbl_ctrl(control, "huber_k", 1.5);
+  bool adaptive_huber = false;
+  if (control.containsElementNamed("adaptive_huber")) {
+    adaptive_huber = as<bool>(control["adaptive_huber"]);
+  }
   double lambda0 = get_dbl_ctrl(control, "lambda0", 1e-2);
   double tol_step = get_dbl_ctrl(control, "tol_step", 1e-5);
   double tol_cost = get_dbl_ctrl(control, "tol_cost", 1e-6);
@@ -2295,6 +2401,12 @@ List cpp_volreg_estimate(
   int stencil_by = get_int_ctrl(control, "stencil_by", 4);
   int stencil_bz = get_int_ctrl(control, "stencil_bz", 2);
   double stencil_gamma = get_dbl_ctrl(control, "stencil_gamma", 0.5);
+  bool use_dense_polish = false;
+  if (control.containsElementNamed("use_dense_polish")) {
+    use_dense_polish = as<bool>(control["use_dense_polish"]);
+  }
+  int polish_iter = get_int_ctrl(control, "polish_iter", 5);
+  int polish_n_samples = get_int_ctrl(control, "polish_n_samples", 0);
   double edge_exclude_frac = get_dbl_ctrl(control, "edge_exclude_frac", 0.0);
   int edge_exclude_vox = get_int_ctrl(control, "edge_exclude_vox", 0);
   int nthreads = std::max(1, get_int_ctrl(control, "nthreads", 1));
@@ -2315,6 +2427,14 @@ List cpp_volreg_estimate(
   std::vector<int> samples = make_sample_points(fit_mask, nxyz, n_samples);
   if (samples.empty()) {
     stop("mask produced zero fitting samples");
+  }
+  std::vector<int> polish_samples;
+  if (use_dense_polish && polish_iter > 0) {
+    int polish_target = polish_n_samples > 0 ? polish_n_samples : n_samples;
+    polish_samples = make_sample_points(fit_mask, nxyz, polish_target);
+    if (polish_samples.empty()) {
+      stop("mask produced zero polishing samples");
+    }
   }
 
   NumericVector cost_init(nt, NA_REAL);
@@ -2409,32 +2529,62 @@ List cpp_volreg_estimate(
 
     auto fit_one = [&](int frame_t, const Pose6& init_pose) {
       if (use_ic_local) {
-        return optimize_frame_pose_ic(data,
-                                      nx,
-                                      ny,
-                                      nz,
-                                      nxyz,
-                                      frame_t,
-                                      pixdim,
-                                      stencil,
-                                      init_pose,
-                                      max_iter,
-                                      lambda0,
-                                      tol_step,
-                                      tol_cost,
-                                      huber_k,
-                                      n_restarts,
-                                      use_overlap_taper,
-                                      capture_boost,
-                                      capture_trans_mm,
-                                      capture_rot_deg,
-                                      capture_topk,
-                                      use_whiten_local,
-                                      use_whiten_local ? wm.LinvT : nullptr,
-                                      use_nuisance_marginalization,
-                                      nuisance_dim_local,
-                                      nuisance_ridge,
-                                      nthreads);
+        FrameFit fit_ic = optimize_frame_pose_ic(data,
+                                                 nx,
+                                                 ny,
+                                                 nz,
+                                                 nxyz,
+                                                 frame_t,
+                                                 pixdim,
+                                                 stencil,
+                                                 init_pose,
+                                                 max_iter,
+                                                 lambda0,
+                                                 tol_step,
+                                                 tol_cost,
+                                                 huber_k,
+                                                 adaptive_huber,
+                                                 n_restarts,
+                                                 use_overlap_taper,
+                                                 capture_boost,
+                                                 capture_trans_mm,
+                                                 capture_rot_deg,
+                                                 capture_topk,
+                                                 use_whiten_local,
+                                                 use_whiten_local ? wm.LinvT : nullptr,
+                                                 use_nuisance_marginalization,
+                                                 nuisance_dim_local,
+                                                 nuisance_ridge,
+                                                 nthreads);
+        if (use_dense_polish && polish_iter > 0 && !polish_samples.empty()) {
+          FrameFit fit_polish = optimize_frame_pose(data,
+                                                    template_vol,
+                                                    nx,
+                                                    ny,
+                                                    nz,
+                                                    nxyz,
+                                                    frame_t,
+                                                    pixdim,
+                                                    polish_samples,
+                                                    fit_ic.pose,
+                                                    polish_iter,
+                                                    lambda0,
+                                                    tol_step,
+                                                    tol_cost,
+                                                    huber_k,
+                                                    adaptive_huber,
+                                                    0,
+                                                    use_overlap_taper,
+                                                    false,
+                                                    capture_trans_mm,
+                                                    capture_rot_deg,
+                                                    0);
+          fit_polish.restart_used = fit_ic.restart_used;
+          fit_polish.iters += fit_ic.iters;
+          fit_polish.flags |= fit_ic.flags;
+          return fit_polish;
+        }
+        return fit_ic;
       }
       return optimize_frame_pose(data,
                                  template_vol,
@@ -2451,6 +2601,7 @@ List cpp_volreg_estimate(
                                  tol_step,
                                  tol_cost,
                                  huber_k,
+                                 adaptive_huber,
                                  n_restarts,
                                  use_overlap_taper,
                                  capture_boost,
