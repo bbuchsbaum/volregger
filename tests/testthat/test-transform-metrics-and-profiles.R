@@ -24,6 +24,17 @@ test_that("invert_motion returns the inverse homogeneous transform", {
   expect_equal(ident, diag(4), tolerance = 1e-10)
 })
 
+test_that("16 x 6 matrix representation is parsed as six transforms", {
+  mats <- array(rep(diag(4), 6), dim = c(4, 4, 6))
+  mats[1, 4, ] <- seq_len(6)
+  flat <- matrix(as.numeric(mats), nrow = 16, ncol = 6)
+
+  parsed <- motion_matrices(flat)
+
+  expect_equal(dim(parsed), c(4L, 4L, 6L))
+  expect_equal(parsed, mats)
+})
+
 test_that("volreg_profile exposes named benchmark configurations", {
   prof <- volreg_profile(
     "ic_nuisance_full",
@@ -174,4 +185,54 @@ test_that("real-data benchmark scorecard ranks truth metrics by direction", {
   expect_gt(sum(claim_summary$wins), 0)
   expect_equal(sum(summary$losses), 0)
   expect_equal(sum(claim_summary$losses), 0)
+})
+
+test_that("real-data benchmark claim summary spans multiple truth scenarios", {
+  env <- new.env(parent = globalenv())
+  source(testthat::test_path("..", "..", "inst", "benchmarks", "realdata_benchmark_lib.R"), local = env)
+
+  metric_names <- env$benchmark_metric_names()
+  make_row <- function(method, scenario, elapsed_sec, disp_p95, mae_to_truth, tsnr_ratio) {
+    metric_vals <- stats::setNames(rep(NA_real_, length(metric_names)), metric_names)
+    metric_vals[["disp_p95"]] <- disp_p95
+    metric_vals[["mae_to_truth"]] <- mae_to_truth
+    metric_vals[["tsnr_ratio"]] <- tsnr_ratio
+    cbind(
+      data.frame(
+        method = method,
+        dataset_mode = "truth_injected",
+        scenario = scenario,
+        method_model = method,
+        elapsed_sec = elapsed_sec,
+        estimate_sec = elapsed_sec,
+        apply_sec = NA_real_,
+        report_sec = 0,
+        peak_rss_mb = NA_real_,
+        temp_bytes_written = NA_real_,
+        status = "ok",
+        error = NA_character_,
+        stringsAsFactors = FALSE
+      ),
+      as.data.frame(as.list(metric_vals), stringsAsFactors = FALSE)
+    )
+  }
+
+  raw <- rbind(
+    make_row("volregger", "low_motion", 2, 0.5, 10, 2.0),
+    make_row("nifreeze", "low_motion", 4, 1.5, 30, 1.2),
+    make_row("volregger", "hard_motion_plus_nuisance", 3, 0.8, 12, 2.5),
+    make_row("nifreeze", "hard_motion_plus_nuisance", 5, 3.0, 40, 1.4)
+  )
+
+  claim_summary <- env$summarize_benchmark_scorecard(
+    env$make_benchmark_scorecard(raw),
+    claim_only = TRUE
+  )
+
+  expect_equal(
+    sort(unique(claim_summary$scenario)),
+    sort(c("low_motion", "hard_motion_plus_nuisance"))
+  )
+  expect_equal(sum(claim_summary$losses), 0)
+  expect_gt(sum(claim_summary$wins), 0)
 })

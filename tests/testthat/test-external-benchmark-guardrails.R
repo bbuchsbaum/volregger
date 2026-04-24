@@ -106,3 +106,45 @@ test_that("external truth benchmark keeps volregger ahead of nifreeze on low-mot
   expect_gt(nrow(high_value), 0)
   expect_false(any(high_value$comparison == "loss", na.rm = TRUE))
 })
+
+test_that("external truth benchmark claim metrics hold across varied scenarios", {
+  skip_on_cran()
+  skip_if_not(identical(tolower(Sys.getenv("VOLREGGER_RUN_EXTERNAL_BENCH")), "true"))
+  skip_if_not(docker_benchmark_ready())
+  skip_if_not(requireNamespace("pkgload", quietly = TRUE))
+  skip_if_not(file.exists(file.path(pkgload::pkg_path(), "data-raw", "sub-01_task-freerecall_bold.nii.gz")))
+
+  out_dir <- file.path(tempdir(), "volregger_varied_truth_guardrail")
+  dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+  scenarios <- c("low_motion", "moderate_motion", "hard_motion_plus_nuisance")
+
+  raw <- run_realdata_benchmark(
+    c(
+      "--native-frames", "4",
+      "--truth-frames", "6",
+      "--scenarios", paste(scenarios, collapse = ","),
+      "--skip-afni",
+      "--nthreads", "2"
+    ),
+    out_dir = out_dir
+  )
+
+  truth_rows <- raw[raw$scenario %in% scenarios & raw$status == "ok", ]
+  if (!all(scenarios %in% truth_rows$scenario) ||
+      !all(c("volregger", "nifreeze") %in% truth_rows$method)) {
+    skip("varied truth benchmark backends unavailable in this environment")
+  }
+
+  claim_path <- file.path(out_dir, "benchmark_vs_nifreeze_realdata_claim_summary.csv")
+  skip_if_not(file.exists(claim_path))
+  claim_summary <- utils::read.csv(claim_path, check.names = FALSE)
+  rows <- claim_summary[
+    claim_summary$scenario %in% scenarios &
+      claim_summary$baseline == "nifreeze" &
+      claim_summary$claim_metric,
+  ]
+
+  expect_equal(sort(unique(rows$scenario)), sort(scenarios))
+  expect_false(any(rows$losses > 0, na.rm = TRUE))
+  expect_true(all(rows$wins > 0 | rows$ties > 0))
+})

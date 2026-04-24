@@ -136,20 +136,20 @@ motion_displacement_summary <- function(mask, motion, truth, pixdim = c(1, 1, 1)
     return(array(as.numeric(motion), dim = dim(motion)))
   }
 
-  if (is.matrix(motion) && ncol(motion) == 6L) {
-    nt <- nrow(motion)
-    out <- array(0, dim = c(4L, 4L, nt))
-    for (t in seq_len(nt)) {
-      out[, , t] <- .pose_to_matrix(motion[t, ])
-    }
-    return(out)
-  }
-
   if (is.matrix(motion) && nrow(motion) == 16L) {
     nt <- ncol(motion)
     out <- array(0, dim = c(4L, 4L, nt))
     for (t in seq_len(nt)) {
       out[, , t] <- array(motion[, t], dim = c(4L, 4L))
+    }
+    return(out)
+  }
+
+  if (is.matrix(motion) && ncol(motion) == 6L) {
+    nt <- nrow(motion)
+    out <- array(0, dim = c(4L, 4L, nt))
+    for (t in seq_len(nt)) {
+      out[, , t] <- .pose_to_matrix(motion[t, ])
     }
     return(out)
   }
