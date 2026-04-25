@@ -573,6 +573,87 @@ motion_dynamics_error_summary <- function(motion_mats, truth) {
   )
 }
 
+motion_truth_fd_diagnostics <- function(motion_mats, truth, radius = 50) {
+  mats <- motion_matrices(motion_mats)
+  ref <- motion_matrices(truth)
+  nt <- dim(mats)[3]
+  if (dim(ref)[3] != nt) {
+    stop("truth must contain the same number of frames as motion", call. = FALSE)
+  }
+
+  fd_step_est <- framewise_disp_from_transform(mats, radius = radius)
+  fd_step_truth <- framewise_disp_from_transform(ref, radius = radius)
+  fd_abs_est <- fd_from_transform(mats, radius = radius)
+  fd_abs_truth <- fd_from_transform(ref, radius = radius)
+
+  pose <- motion_mats_to_pose(mats)
+  truth_pose <- motion_mats_to_pose(ref)
+  pose_step_error <- rep(NA_real_, nt)
+  if (nt >= 2L) {
+    dpose <- diff(pose)
+    dtruth <- diff(truth_pose)
+    dpose[, 4:6] <- dpose[, 4:6] * radius
+    dtruth[, 4:6] <- dtruth[, 4:6] * radius
+    pose_step_error[-1] <- sqrt(rowMeans((dpose - dtruth)^2, na.rm = TRUE))
+  }
+
+  frames <- data.frame(
+    frame = seq_len(nt),
+    fd_step_est = fd_step_est,
+    fd_step_truth = fd_step_truth,
+    fd_step_error = fd_step_est - fd_step_truth,
+    fd_step_abs_error = abs(fd_step_est - fd_step_truth),
+    fd_abs_est = fd_abs_est,
+    fd_abs_truth = fd_abs_truth,
+    fd_abs_error = fd_abs_est - fd_abs_truth,
+    fd_abs_abs_error = abs(fd_abs_est - fd_abs_truth),
+    pose_step_error = pose_step_error,
+    stringsAsFactors = FALSE
+  )
+
+  finite_step <- is.finite(fd_step_est) & is.finite(fd_step_truth)
+  finite_abs <- is.finite(fd_abs_est) & is.finite(fd_abs_truth)
+  step_sd_truth <- stats::sd(fd_step_truth, na.rm = TRUE)
+  step_range_truth <- diff(range(fd_step_truth, na.rm = TRUE))
+  step_corr <- if (sum(finite_step) >= 3L && stats::sd(fd_step_est[finite_step]) > 1e-8 && stats::sd(fd_step_truth[finite_step]) > 1e-8) {
+    stats::cor(fd_step_est[finite_step], fd_step_truth[finite_step])
+  } else {
+    NA_real_
+  }
+  step_spearman <- if (sum(finite_step) >= 3L && stats::sd(fd_step_est[finite_step]) > 1e-8 && stats::sd(fd_step_truth[finite_step]) > 1e-8) {
+    suppressWarnings(stats::cor(fd_step_est[finite_step], fd_step_truth[finite_step], method = "spearman"))
+  } else {
+    NA_real_
+  }
+  abs_corr <- if (sum(finite_abs) >= 3L && stats::sd(fd_abs_est[finite_abs]) > 1e-8 && stats::sd(fd_abs_truth[finite_abs]) > 1e-8) {
+    stats::cor(fd_abs_est[finite_abs], fd_abs_truth[finite_abs])
+  } else {
+    NA_real_
+  }
+
+  summary <- data.frame(
+    fd_step_corr = step_corr,
+    fd_step_spearman = step_spearman,
+    fd_step_mae = mean(frames$fd_step_abs_error, na.rm = TRUE),
+    fd_step_rmse = sqrt(mean(frames$fd_step_error^2, na.rm = TRUE)),
+    fd_step_bias = mean(frames$fd_step_error, na.rm = TRUE),
+    fd_step_p95_abs_error = unname(stats::quantile(frames$fd_step_abs_error, probs = 0.95, na.rm = TRUE)),
+    fd_step_sd_est = stats::sd(fd_step_est, na.rm = TRUE),
+    fd_step_sd_truth = step_sd_truth,
+    fd_step_range_est = diff(range(fd_step_est, na.rm = TRUE)),
+    fd_step_range_truth = step_range_truth,
+    fd_step_error_to_truth_sd = mean(frames$fd_step_abs_error, na.rm = TRUE) / max(step_sd_truth, 1e-8),
+    fd_step_error_to_truth_range = mean(frames$fd_step_abs_error, na.rm = TRUE) / max(step_range_truth, 1e-8),
+    fd_abs_corr = abs_corr,
+    fd_abs_mae = mean(frames$fd_abs_abs_error, na.rm = TRUE),
+    pose_step_error_mean = mean(frames$pose_step_error, na.rm = TRUE),
+    pose_step_error_p95 = unname(stats::quantile(frames$pose_step_error, probs = 0.95, na.rm = TRUE)),
+    stringsAsFactors = FALSE
+  )
+
+  list(summary = summary, frames = frames)
+}
+
 benchmark_metric_names <- function() {
   c(
     "fit_fail_rate",

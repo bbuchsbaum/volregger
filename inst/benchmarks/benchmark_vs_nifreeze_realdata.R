@@ -461,18 +461,64 @@ scorecard_claim_summary <- summarize_benchmark_scorecard(scorecard, claim_only =
 no_regression_gate <- make_no_regression_gate(raw)
 no_regression_summary <- summarize_no_regression_gate(no_regression_gate)
 tsnr_context <- make_tsnr_context(raw)
+fd_truth_summary_rows <- list()
+fd_truth_frame_rows <- list()
+fd_truth_summary_idx <- 1L
+fd_truth_frame_idx <- 1L
+for (sc in scenario_names) {
+  ok_rows <- raw[raw$scenario == sc & raw$dataset_mode == "truth_injected" & raw$status == "ok", , drop = FALSE]
+  if (!nrow(ok_rows)) {
+    next
+  }
+  truth <- scenario_objects[[sc]]$truth_mats
+  for (method in ok_rows$method) {
+    method_dir <- file.path(out_dir, "runs", sc, method)
+    mats_path <- file.path(method_dir, "motion_mats.csv")
+    if (!file.exists(mats_path)) {
+      next
+    }
+    mats <- read_motion_matrix_csv(mats_path)
+    diag <- motion_truth_fd_diagnostics(mats, truth)
+    fd_truth_summary_rows[[fd_truth_summary_idx]] <- cbind(
+      data.frame(
+        scenario = sc,
+        dataset_mode = "truth_injected",
+        method = method,
+        stringsAsFactors = FALSE
+      ),
+      diag$summary
+    )
+    fd_truth_frame_rows[[fd_truth_frame_idx]] <- cbind(
+      data.frame(
+        scenario = sc,
+        dataset_mode = "truth_injected",
+        method = method,
+        stringsAsFactors = FALSE
+      ),
+      diag$frames
+    )
+    fd_truth_summary_idx <- fd_truth_summary_idx + 1L
+    fd_truth_frame_idx <- fd_truth_frame_idx + 1L
+  }
+}
+fd_truth_summary <- if (length(fd_truth_summary_rows)) do.call(rbind, fd_truth_summary_rows) else data.frame()
+fd_truth_frames <- if (length(fd_truth_frame_rows)) do.call(rbind, fd_truth_frame_rows) else data.frame()
 scorecard_csv <- file.path(out_dir, "benchmark_vs_nifreeze_realdata_scorecard.csv")
 scorecard_summary_csv <- file.path(out_dir, "benchmark_vs_nifreeze_realdata_scorecard_summary.csv")
 scorecard_claim_summary_csv <- file.path(out_dir, "benchmark_vs_nifreeze_realdata_claim_summary.csv")
 no_regression_csv <- file.path(out_dir, "benchmark_vs_nifreeze_realdata_no_regression.csv")
 no_regression_summary_csv <- file.path(out_dir, "benchmark_vs_nifreeze_realdata_no_regression_summary.csv")
 tsnr_context_csv <- file.path(out_dir, "benchmark_vs_nifreeze_realdata_tsnr_context.csv")
+fd_truth_summary_csv <- file.path(out_dir, "benchmark_vs_nifreeze_realdata_fd_truth_summary.csv")
+fd_truth_frames_csv <- file.path(out_dir, "benchmark_vs_nifreeze_realdata_fd_truth_frames.csv")
 utils::write.csv(scorecard, scorecard_csv, row.names = FALSE)
 utils::write.csv(scorecard_summary, scorecard_summary_csv, row.names = FALSE)
 utils::write.csv(scorecard_claim_summary, scorecard_claim_summary_csv, row.names = FALSE)
 utils::write.csv(no_regression_gate, no_regression_csv, row.names = FALSE)
 utils::write.csv(no_regression_summary, no_regression_summary_csv, row.names = FALSE)
 utils::write.csv(tsnr_context, tsnr_context_csv, row.names = FALSE)
+utils::write.csv(fd_truth_summary, fd_truth_summary_csv, row.names = FALSE)
+utils::write.csv(fd_truth_frames, fd_truth_frames_csv, row.names = FALSE)
 
 safe_ratio <- function(x, y) {
   if (!is.finite(x) || !is.finite(y)) {
@@ -616,6 +662,8 @@ cat(" -", scorecard_claim_summary_csv, "\n")
 cat(" -", no_regression_csv, "\n")
 cat(" -", no_regression_summary_csv, "\n")
 cat(" -", tsnr_context_csv, "\n")
+cat(" -", fd_truth_summary_csv, "\n")
+cat(" -", fd_truth_frames_csv, "\n")
 cat(" -", paired_csv, "\n")
 cat(" -", solution_summary_csv, "\n")
 cat(" -", solution_frames_csv, "\n")

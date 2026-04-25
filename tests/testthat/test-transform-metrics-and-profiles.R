@@ -301,6 +301,29 @@ test_that("real-data benchmark FD correlation uses frame-to-frame displacement",
   expect_equal(dyn$fd_abs_corr_to_truth, expected_abs_corr, tolerance = 1e-12)
 })
 
+test_that("real-data benchmark FD diagnostics expose framewise truth errors", {
+  env <- new.env(parent = globalenv())
+  source(testthat::test_path("..", "..", "inst", "benchmarks", "realdata_benchmark_lib.R"), local = env)
+
+  truth_pose <- cbind(c(0, 1.0, 2.0, 3.0, 4.0), 0, 0, 0, 0, 0)
+  est_pose <- cbind(c(0, 1.1, 1.9, 3.2, 3.8), 0, 0, 0, 0, 0)
+  diag <- env$motion_truth_fd_diagnostics(
+    motion_matrices(est_pose),
+    motion_matrices(truth_pose)
+  )
+
+  expect_equal(nrow(diag$frames), nrow(truth_pose))
+  expect_true(all(c("fd_step_est", "fd_step_truth", "fd_step_abs_error", "pose_step_error") %in% names(diag$frames)))
+  expect_true(all(c("fd_step_corr", "fd_step_mae", "fd_step_error_to_truth_sd", "fd_abs_corr") %in% names(diag$summary)))
+  expect_equal(diag$frames$fd_step_error[1], 0, tolerance = 1e-12)
+  expect_equal(diag$summary$fd_step_mae, mean(diag$frames$fd_step_abs_error), tolerance = 1e-12)
+  expect_equal(
+    diag$summary$fd_step_corr,
+    stats::cor(diag$frames$fd_step_est, diag$frames$fd_step_truth),
+    tolerance = 1e-12
+  )
+})
+
 test_that("real-data benchmark scorecard ranks truth metrics by direction", {
   env <- new.env(parent = globalenv())
   source(testthat::test_path("..", "..", "inst", "benchmarks", "realdata_benchmark_lib.R"), local = env)
