@@ -412,6 +412,16 @@ masked_residual_dvars <- function(a, b, mask) {
   mean(vals, na.rm = TRUE)
 }
 
+masked_residual_dvars_ratio <- function(a, b, mask) {
+  resid <- masked_residual_dvars(a, b, mask)
+  truth_vals <- as.numeric(masked_values_4d(b, mask))
+  scale <- stats::sd(truth_vals, na.rm = TRUE)
+  if (!is.finite(scale) || scale < 1e-8) {
+    scale <- mean(abs(truth_vals), na.rm = TRUE)
+  }
+  resid / max(scale, 1e-8)
+}
+
 masked_temporal_corr <- function(a, b, mask) {
   amat <- masked_values_4d(a, mask)
   bmat <- masked_values_4d(b, mask)
@@ -431,6 +441,37 @@ masked_edge_ratio_to_truth <- function(corrected, clean, mask) {
   clean_edge <- compute_blur_proxy(clean, mask)
   corrected_edge <- compute_blur_proxy(corrected, mask)
   corrected_edge / max(clean_edge, 1e-8)
+}
+
+masked_highfreq_residual_ratio <- function(corrected, clean, mask) {
+  residual_edge <- compute_blur_proxy(corrected - clean, mask)
+  clean_edge <- compute_blur_proxy(clean, mask)
+  residual_edge / max(clean_edge, 1e-8)
+}
+
+erode_mask_once <- function(mask) {
+  mask <- as.array(mask)
+  storage.mode(mask) <- "logical"
+  out <- array(FALSE, dim = dim(mask))
+  if (any(dim(mask) < 3L)) {
+    return(out)
+  }
+  core <- mask[2:(dim(mask)[1] - 1L), 2:(dim(mask)[2] - 1L), 2:(dim(mask)[3] - 1L), drop = FALSE] &
+    mask[1:(dim(mask)[1] - 2L), 2:(dim(mask)[2] - 1L), 2:(dim(mask)[3] - 1L), drop = FALSE] &
+    mask[3:dim(mask)[1], 2:(dim(mask)[2] - 1L), 2:(dim(mask)[3] - 1L), drop = FALSE] &
+    mask[2:(dim(mask)[1] - 1L), 1:(dim(mask)[2] - 2L), 2:(dim(mask)[3] - 1L), drop = FALSE] &
+    mask[2:(dim(mask)[1] - 1L), 3:dim(mask)[2], 2:(dim(mask)[3] - 1L), drop = FALSE] &
+    mask[2:(dim(mask)[1] - 1L), 2:(dim(mask)[2] - 1L), 1:(dim(mask)[3] - 2L), drop = FALSE] &
+    mask[2:(dim(mask)[1] - 1L), 2:(dim(mask)[2] - 1L), 3:dim(mask)[3], drop = FALSE]
+  out[2:(dim(mask)[1] - 1L), 2:(dim(mask)[2] - 1L), 2:(dim(mask)[3] - 1L)] <- core
+  out
+}
+
+masked_frame_nrmse_or_na <- function(a, b, mask) {
+  if (!any(mask, na.rm = TRUE)) {
+    return(NA_real_)
+  }
+  masked_frame_nrmse(a, b, mask)
 }
 
 truth_image_fidelity_loss <- function(corr_to_truth, nrmse_to_truth, edge_ratio_to_truth, temporal_corr_to_truth = NA_real_) {
@@ -488,6 +529,40 @@ motion_matrix_error_summary <- function(motion_mats, truth) {
   )
 }
 
+motion_dynamics_error_summary <- function(motion_mats, truth) {
+  mats <- motion_matrices(motion_mats)
+  ref <- motion_matrices(truth)
+  nt <- dim(mats)[3]
+  if (dim(ref)[3] != nt) {
+    stop("truth must contain the same number of frames as motion", call. = FALSE)
+  }
+
+  fd_est <- fd_from_transform(mats)
+  fd_truth <- fd_from_transform(ref)
+  fd_corr <- if (stats::sd(fd_est, na.rm = TRUE) > 1e-8 && stats::sd(fd_truth, na.rm = TRUE) > 1e-8) {
+    stats::cor(fd_est, fd_truth, use = "complete.obs")
+  } else {
+    NA_real_
+  }
+
+  pose <- motion_mats_to_pose(mats)
+  truth_pose <- motion_mats_to_pose(ref)
+  if (nt < 2L) {
+    pose_jitter_error <- NA_real_
+  } else {
+    dpose <- diff(pose)
+    dtruth <- diff(truth_pose)
+    dpose[, 4:6] <- dpose[, 4:6] * 50
+    dtruth[, 4:6] <- dtruth[, 4:6] * 50
+    pose_jitter_error <- sqrt(mean((dpose - dtruth)^2, na.rm = TRUE))
+  }
+
+  list(
+    fd_corr_to_truth = fd_corr,
+    pose_jitter_error = pose_jitter_error
+  )
+}
+
 benchmark_metric_names <- function() {
   c(
     "fit_fail_rate",
@@ -525,13 +600,20 @@ benchmark_metric_names <- function() {
     "rel_rot_deg_median",
     "rel_rot_deg_p95",
     "affine_det_error_max",
+    "fd_corr_to_truth",
+    "pose_jitter_error",
     "corr_to_truth",
     "mse_to_truth",
     "mae_to_truth",
     "nrmse_to_truth",
     "residual_dvars_to_truth",
+    "residual_dvars_ratio_to_truth",
     "temporal_corr_to_truth",
     "edge_ratio_to_truth",
+    "edge_error_to_truth",
+    "highfreq_residual_ratio",
+    "nrmse_inner_to_truth",
+    "nrmse_boundary_to_truth",
     "truth_image_fidelity_loss"
   )
 }
@@ -542,87 +624,86 @@ empty_benchmark_metrics <- function() {
 }
 
 benchmark_scorecard_specs <- function() {
-  metrics <- c(
-    "elapsed_sec",
-    "estimate_sec",
-    "temp_bytes_written",
-    "disp_median",
-    "disp_p95",
-    "disp_max",
-    "fd_error",
-    "trans_rmse",
-    "rot_rmse",
-    "trans_abs_median",
-    "trans_abs_p95",
-    "tx_mae",
-    "ty_mae",
-    "tz_mae",
-    "rot_abs_deg_median",
-    "rot_abs_deg_p95",
-    "rx_mae_deg",
-    "ry_mae_deg",
-    "rz_mae_deg",
-    "rel_frob_median",
-    "rel_frob_p95",
-    "rel_rot_deg_median",
-    "rel_rot_deg_p95",
-    "affine_det_error_max",
-    "mse_to_truth",
-    "mae_to_truth",
-    "nrmse_to_truth",
-    "residual_dvars_to_truth",
-    "dvars_after_mean",
-    "dvars_after_p95",
-    "dvars_ratio",
-    "corr_to_truth",
-    "temporal_corr_to_truth",
-    "tsnr_ratio",
-    "edge_ratio_to_truth",
-    "truth_image_fidelity_loss"
-  )
-  family <- c(
-    rep("runtime", 3),
-    rep("truth_displacement", 4),
-    rep("truth_pose", 12),
-    rep("truth_matrix", 5),
-    rep("truth_image", 4),
-    rep("qc", 3),
-    rep("truth_image", 2),
-    "qc",
-    "truth_image",
-    "truth_image"
-  )
-  role <- c(
-    "claim_efficiency",
-    "claim_efficiency",
-    "diagnostic_resource",
-    rep("claim_truth", 8),
-    rep("diagnostic_pose_axis", 3),
-    rep("claim_truth", 2),
-    rep("diagnostic_pose_axis", 3),
-    rep("claim_truth", 5),
-    rep("claim_truth", 3),
-    "diagnostic_smoothing",
-    rep("diagnostic_smoothing", 3),
-    rep("claim_truth", 2),
-    "claim_qc",
-    "claim_truth",
-    "claim_truth"
+  rows <- list(
+    runtime = data.frame(
+      metric = c("elapsed_sec", "estimate_sec", "temp_bytes_written"),
+      family = "runtime",
+      role = c("claim_efficiency", "claim_efficiency", "diagnostic_resource"),
+      stringsAsFactors = FALSE
+    ),
+    displacement = data.frame(
+      metric = c("disp_median", "disp_p95", "disp_max", "fd_error"),
+      family = "truth_displacement",
+      role = "claim_truth",
+      stringsAsFactors = FALSE
+    ),
+    pose_claim = data.frame(
+      metric = c("trans_rmse", "rot_rmse", "trans_abs_median", "trans_abs_p95",
+                 "rot_abs_deg_median", "rot_abs_deg_p95"),
+      family = "truth_pose",
+      role = "claim_truth",
+      stringsAsFactors = FALSE
+    ),
+    pose_axis = data.frame(
+      metric = c("tx_mae", "ty_mae", "tz_mae", "rx_mae_deg", "ry_mae_deg", "rz_mae_deg"),
+      family = "truth_pose",
+      role = "diagnostic_pose_axis",
+      stringsAsFactors = FALSE
+    ),
+    matrix = data.frame(
+      metric = c("rel_frob_median", "rel_frob_p95", "rel_rot_deg_median",
+                 "rel_rot_deg_p95", "affine_det_error_max"),
+      family = "truth_matrix",
+      role = "claim_truth",
+      stringsAsFactors = FALSE
+    ),
+    dynamics = data.frame(
+      metric = c("fd_corr_to_truth", "pose_jitter_error"),
+      family = "truth_dynamics",
+      role = "claim_truth",
+      stringsAsFactors = FALSE
+    ),
+    image_claim = data.frame(
+      metric = c("mse_to_truth", "mae_to_truth", "nrmse_to_truth",
+                 "residual_dvars_ratio_to_truth", "corr_to_truth",
+                 "temporal_corr_to_truth", "edge_ratio_to_truth",
+                 "edge_error_to_truth", "truth_image_fidelity_loss"),
+      family = "truth_image",
+      role = "claim_truth",
+      stringsAsFactors = FALSE
+    ),
+    residual_diag = data.frame(
+      metric = c("residual_dvars_to_truth", "highfreq_residual_ratio"),
+      family = "truth_image",
+      role = c("diagnostic_residual", "diagnostic_ringing"),
+      stringsAsFactors = FALSE
+    ),
+    smoothing = data.frame(
+      metric = c("dvars_after_mean", "dvars_after_p95", "dvars_ratio",
+                 "tsnr_ratio", "blur_proxy_ratio"),
+      family = "qc",
+      role = "diagnostic_smoothing",
+      stringsAsFactors = FALSE
+    ),
+    region_diag = data.frame(
+      metric = c("nrmse_inner_to_truth", "nrmse_boundary_to_truth"),
+      family = "truth_image",
+      role = "diagnostic_region",
+      stringsAsFactors = FALSE
+    )
   )
 
-  specs <- data.frame(
-    metric = metrics,
-    direction = ifelse(
-      metrics %in% c("corr_to_truth", "temporal_corr_to_truth", "tsnr_ratio"),
-      "higher",
-      ifelse(metrics == "edge_ratio_to_truth", "target", "lower")
-    ),
-    target = ifelse(metrics == "edge_ratio_to_truth", 1, NA_real_),
-    family = family,
-    role = role,
-    stringsAsFactors = FALSE
+  specs <- do.call(rbind, rows)
+  specs$direction <- ifelse(
+    specs$metric %in% c("corr_to_truth", "temporal_corr_to_truth", "tsnr_ratio", "fd_corr_to_truth"),
+    "higher",
+    ifelse(specs$metric == "edge_ratio_to_truth", "target", "lower")
   )
-  specs$role[specs$metric == "tsnr_ratio"] <- "diagnostic_smoothing"
+  specs$target <- ifelse(specs$metric == "edge_ratio_to_truth", 1, NA_real_)
+  specs$tolerance <- 1e-8
+  specs$tolerance[specs$metric == "fd_corr_to_truth"] <- 0.02
+  specs$tolerance[specs$metric == "residual_dvars_ratio_to_truth"] <- 0.02
+  specs <- specs[, c("metric", "direction", "target", "tolerance", "family", "role")]
   specs$claim_metric <- startsWith(specs$role, "claim_")
   specs
 }
@@ -693,7 +774,8 @@ make_benchmark_scorecard <- function(raw, primary_method = "volregger", truth_on
           primary = primary[[metric]],
           baseline = baseline[[metric]],
           direction = specs$direction[spec_idx],
-          target = specs$target[spec_idx]
+          target = specs$target[spec_idx],
+          tolerance = specs$tolerance[spec_idx]
         )
         rows[[row_idx]] <- data.frame(
           scenario = scenario_name,
@@ -798,6 +880,8 @@ compute_benchmark_metrics <- function(input_run, corrected, mask, motion_mats, t
 
     matrix_err <- motion_matrix_error_summary(motion_mats, truth)
     out <- c(out, matrix_err)
+    dynamics_err <- motion_dynamics_error_summary(motion_mats, truth)
+    out <- c(out, dynamics_err)
   } else {
     out$disp_median <- NA_real_
     out$disp_p95 <- NA_real_
@@ -820,6 +904,8 @@ compute_benchmark_metrics <- function(input_run, corrected, mask, motion_mats, t
     out$rel_rot_deg_median <- NA_real_
     out$rel_rot_deg_p95 <- NA_real_
     out$affine_det_error_max <- NA_real_
+    out$fd_corr_to_truth <- NA_real_
+    out$pose_jitter_error <- NA_real_
   }
 
   if (!is.null(clean)) {
@@ -828,8 +914,15 @@ compute_benchmark_metrics <- function(input_run, corrected, mask, motion_mats, t
     out$mae_to_truth <- masked_frame_mae(corrected, clean, mask)
     out$nrmse_to_truth <- masked_frame_nrmse(corrected, clean, mask)
     out$residual_dvars_to_truth <- masked_residual_dvars(corrected, clean, mask)
+    out$residual_dvars_ratio_to_truth <- masked_residual_dvars_ratio(corrected, clean, mask)
     out$temporal_corr_to_truth <- masked_temporal_corr(corrected, clean, mask)
     out$edge_ratio_to_truth <- masked_edge_ratio_to_truth(corrected, clean, mask)
+    out$edge_error_to_truth <- abs(out$edge_ratio_to_truth - 1)
+    out$highfreq_residual_ratio <- masked_highfreq_residual_ratio(corrected, clean, mask)
+    inner_mask <- erode_mask_once(mask)
+    boundary_mask <- mask & !inner_mask
+    out$nrmse_inner_to_truth <- masked_frame_nrmse_or_na(corrected, clean, inner_mask)
+    out$nrmse_boundary_to_truth <- masked_frame_nrmse_or_na(corrected, clean, boundary_mask)
     out$truth_image_fidelity_loss <- truth_image_fidelity_loss(
       corr_to_truth = out$corr_to_truth,
       nrmse_to_truth = out$nrmse_to_truth,
@@ -842,8 +935,13 @@ compute_benchmark_metrics <- function(input_run, corrected, mask, motion_mats, t
     out$mae_to_truth <- NA_real_
     out$nrmse_to_truth <- NA_real_
     out$residual_dvars_to_truth <- NA_real_
+    out$residual_dvars_ratio_to_truth <- NA_real_
     out$temporal_corr_to_truth <- NA_real_
     out$edge_ratio_to_truth <- NA_real_
+    out$edge_error_to_truth <- NA_real_
+    out$highfreq_residual_ratio <- NA_real_
+    out$nrmse_inner_to_truth <- NA_real_
+    out$nrmse_boundary_to_truth <- NA_real_
     out$truth_image_fidelity_loss <- NA_real_
   }
 

@@ -243,8 +243,14 @@ test_that("real-data benchmark truth metrics expose a broad scorecard", {
     "mae_to_truth",
     "nrmse_to_truth",
     "residual_dvars_to_truth",
+    "residual_dvars_ratio_to_truth",
     "temporal_corr_to_truth",
     "edge_ratio_to_truth",
+    "edge_error_to_truth",
+    "highfreq_residual_ratio",
+    "nrmse_inner_to_truth",
+    "nrmse_boundary_to_truth",
+    "pose_jitter_error",
     "truth_image_fidelity_loss"
   )
 
@@ -253,11 +259,17 @@ test_that("real-data benchmark truth metrics expose a broad scorecard", {
   expect_equal(metrics$mae_to_truth, 0, tolerance = 1e-12)
   expect_equal(metrics$nrmse_to_truth, 0, tolerance = 1e-12)
   expect_equal(metrics$residual_dvars_to_truth, 0, tolerance = 1e-12)
+  expect_equal(metrics$residual_dvars_ratio_to_truth, 0, tolerance = 1e-12)
   expect_equal(metrics$trans_abs_p95, 0, tolerance = 1e-12)
   expect_equal(metrics$rot_abs_deg_p95, 0, tolerance = 1e-12)
   expect_equal(metrics$rel_frob_p95, 0, tolerance = 1e-12)
+  expect_equal(metrics$pose_jitter_error, 0, tolerance = 1e-12)
   expect_equal(metrics$temporal_corr_to_truth, 1, tolerance = 1e-12)
   expect_equal(metrics$edge_ratio_to_truth, 1, tolerance = 1e-12)
+  expect_equal(metrics$edge_error_to_truth, 0, tolerance = 1e-12)
+  expect_equal(metrics$highfreq_residual_ratio, 0, tolerance = 1e-12)
+  expect_equal(metrics$nrmse_inner_to_truth, 0, tolerance = 1e-12)
+  expect_equal(metrics$nrmse_boundary_to_truth, 0, tolerance = 1e-12)
   expect_equal(metrics$truth_image_fidelity_loss, 0, tolerance = 1e-12)
 })
 
