@@ -260,6 +260,90 @@ inline double sample_cubic(const double* frame,
   return out / wsum;
 }
 
+inline void lagrange_weights(double x, int width, int* xs, double* wxs) {
+  int start = static_cast<int>(std::floor(x)) - width / 2 + 1;
+  for (int ii = 0; ii < width; ++ii) {
+    xs[ii] = start + ii;
+  }
+  for (int ii = 0; ii < width; ++ii) {
+    double wi = 1.0;
+    double xi = static_cast<double>(xs[ii]);
+    for (int mm = 0; mm < width; ++mm) {
+      if (mm == ii) {
+        continue;
+      }
+      double xm = static_cast<double>(xs[mm]);
+      wi *= (x - xm) / (xi - xm);
+    }
+    wxs[ii] = wi;
+  }
+}
+
+template <bool ZeroPad>
+inline double sample_lagrange(const double* frame,
+                              int nx,
+                              int ny,
+                              int nz,
+                              double x,
+                              double y,
+                              double z,
+                              int width) {
+  int xs[8], ys[8], zs[8];
+  double wxs[8], wys[8], wzs[8];
+  lagrange_weights(x, width, xs, wxs);
+  lagrange_weights(y, width, ys, wys);
+  lagrange_weights(z, width, zs, wzs);
+
+  bool inside = xs[0] >= 0 && xs[width - 1] < nx &&
+                ys[0] >= 0 && ys[width - 1] < ny &&
+                zs[0] >= 0 && zs[width - 1] < nz;
+  double out = 0.0;
+  double wsum = 0.0;
+  if (inside) {
+    for (int kk = 0; kk < width; ++kk) {
+      int zk = zs[kk];
+      double wz = wzs[kk];
+      if (wz == 0.0) continue;
+      for (int jj = 0; jj < width; ++jj) {
+        int yj = ys[jj];
+        double wy = wys[jj];
+        if (wy == 0.0) continue;
+        for (int ii = 0; ii < width; ++ii) {
+          int xi = xs[ii];
+          double wx = wxs[ii];
+          if (wx == 0.0) continue;
+          double w = wx * wy * wz;
+          out += w * sample_at_raw(frame, nx, ny, xi, yj, zk);
+          wsum += w;
+        }
+      }
+    }
+  } else {
+    for (int kk = 0; kk < width; ++kk) {
+      int zk = zs[kk];
+      double wz = wzs[kk];
+      if (wz == 0.0) continue;
+      for (int jj = 0; jj < width; ++jj) {
+        int yj = ys[jj];
+        double wy = wys[jj];
+        if (wy == 0.0) continue;
+        for (int ii = 0; ii < width; ++ii) {
+          int xi = xs[ii];
+          double wx = wxs[ii];
+          if (wx == 0.0) continue;
+          double w = wx * wy * wz;
+          out += w * sample_at_padded<ZeroPad>(frame, nx, ny, nz, xi, yj, zk);
+          wsum += w;
+        }
+      }
+    }
+  }
+  if (wsum == 0.0) {
+    return 0.0;
+  }
+  return out / wsum;
+}
+
 inline double sinc_pi(double x) {
   if (std::abs(x) < 1e-8) {
     return 1.0;
@@ -508,7 +592,15 @@ SEXP cpp_volreg_apply(
     pad_mode = 1;
   }
 
-  enum InterpMode { LINEAR = 0, BSPLINE = 1, LANCZOS = 2, LANCZOS5 = 3, LANCZOS7 = 4 };
+  enum InterpMode {
+    LINEAR = 0,
+    BSPLINE = 1,
+    LANCZOS = 2,
+    LANCZOS5 = 3,
+    LANCZOS7 = 4,
+    QUINTIC = 5,
+    HEPTIC = 6
+  };
   InterpMode mode = BSPLINE;
   if (interp == "linear") {
     mode = LINEAR;
@@ -520,8 +612,12 @@ SEXP cpp_volreg_apply(
     mode = LANCZOS5;
   } else if (interp == "lanczos7") {
     mode = LANCZOS7;
+  } else if (interp == "quintic") {
+    mode = QUINTIC;
+  } else if (interp == "heptic") {
+    mode = HEPTIC;
   } else {
-    stop("interp must be one of: linear, bspline, lanczos, lanczos5, lanczos7");
+    stop("interp must be one of: linear, bspline, lanczos, lanczos5, lanczos7, quintic, heptic");
   }
 
   NumericVector out(data.size());
@@ -659,11 +755,23 @@ SEXP cpp_volreg_apply(
             } else {
               v = sample_lanczos<false>(frame, nx, ny, nz, src[0], src[1], src[2], 5);
             }
-          } else {
+          } else if (mode == LANCZOS7) {
             if (zero_pad) {
               v = sample_lanczos<true>(frame, nx, ny, nz, src[0], src[1], src[2], 7);
             } else {
               v = sample_lanczos<false>(frame, nx, ny, nz, src[0], src[1], src[2], 7);
+            }
+          } else if (mode == QUINTIC) {
+            if (zero_pad) {
+              v = sample_lagrange<true>(frame, nx, ny, nz, src[0], src[1], src[2], 6);
+            } else {
+              v = sample_lagrange<false>(frame, nx, ny, nz, src[0], src[1], src[2], 6);
+            }
+          } else {
+            if (zero_pad) {
+              v = sample_lagrange<true>(frame, nx, ny, nz, src[0], src[1], src[2], 8);
+            } else {
+              v = sample_lagrange<false>(frame, nx, ny, nz, src[0], src[1], src[2], 8);
             }
           }
           out_ptr[off + static_cast<size_t>(i + nx * (j + ny * k))] = v;

@@ -8,7 +8,7 @@ defaults <- list(
   native_frames = "8",
   truth_frames = "24",
   scenarios = "low_motion,hard_motion_plus_nuisance",
-  interps = "linear,bspline,lanczos,lanczos5,lanczos7",
+  interps = "linear,bspline,lanczos,lanczos5,lanczos7,quintic,heptic",
   baseline_interp = "lanczos",
   volreg_profile_native = "fast_fmri",
   volreg_profile_truth = "ic_nuisance_adaptive_tuned",
@@ -20,7 +20,7 @@ opts <- parse_benchmark_args(commandArgs(trailingOnly = TRUE), defaults = defaul
 
 interps <- trimws(strsplit(opts$interps, ",", fixed = TRUE)[[1]])
 interps <- interps[nzchar(interps)]
-valid_interps <- c("linear", "bspline", "lanczos", "lanczos5", "lanczos7")
+valid_interps <- c("linear", "bspline", "lanczos", "lanczos5", "lanczos7", "quintic", "heptic")
 bad <- setdiff(interps, valid_interps)
 if (length(bad)) {
   stop("--interps contains unsupported values: ", paste(bad, collapse = ", "), call. = FALSE)

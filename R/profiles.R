@@ -90,7 +90,7 @@ volreg_profile <- function(
     ),
     fast_fmri = list(
       engine = "rigid_robust",
-      components = c("capture_boost", "ic_stencil", "whiten", "fast_native", "edge_exclude", "valid_template_refresh", "parallel_frames"),
+      components = c("capture_boost", "ic_stencil", "whiten", "fast_native", "edge_exclude", "valid_template_refresh", "parallel_frames", "heptic_final"),
       control = list(
         use_ic_stencil = TRUE,
         whiten_modes = TRUE,
@@ -101,7 +101,8 @@ volreg_profile <- function(
         max_iter = c(30L, 20L, 12L),
         edge_exclude_frac = 0.05,
         template_refresh_valid_only = TRUE,
-        parallel_frames = TRUE
+        parallel_frames = TRUE,
+        interp_final = "heptic"
       )
     ),
     ic_stencil = list(
@@ -151,7 +152,7 @@ volreg_profile <- function(
     ),
     ic_nuisance_adaptive_tuned = list(
       engine = "rigid_robust",
-      components = c("capture_boost", "ic_stencil", "whiten", "nuisance", "adaptive_huber", "huber_0.15", "iter_12", "parallel_frames"),
+      components = c("capture_boost", "ic_stencil", "whiten", "nuisance", "adaptive_huber", "huber_0.15", "iter_12", "parallel_frames", "heptic_final"),
       control = list(
         use_ic_stencil = TRUE,
         whiten_modes = TRUE,
@@ -163,7 +164,8 @@ volreg_profile <- function(
         template_refresh_valid_only = TRUE,
         huber_k = 0.15,
         max_iter = 12L,
-        parallel_frames = TRUE
+        parallel_frames = TRUE,
+        interp_final = "heptic"
       )
     ),
     ic_nuisance_adaptive_guarded = list(

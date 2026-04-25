@@ -8,7 +8,8 @@
 #' @param slice_times Optional slice timing offsets.
 #' @param mb_groups Optional multiband group IDs.
 #' @param resample If TRUE, apply estimated motion to generate corrected output.
-#' @param interp_final Final interpolation method.
+#' @param interp_final Final interpolation method. When `NULL`, the active
+#'   profile selects the final interpolator, falling back to `"bspline"`.
 #' @param pad_final Boundary handling for final resampling.
 #' @param zpad_final Number of symmetric zero-valued voxels to add before final
 #'   resampling and cropping back to the original grid.
@@ -29,7 +30,7 @@ volreg <- function(
     slice_times = NULL,
     mb_groups = NULL,
     resample = TRUE,
-    interp_final = c("bspline", "lanczos", "lanczos5", "lanczos7", "linear"),
+    interp_final = NULL,
     pad_final = c("clamp", "zero"),
     zpad_final = 0L,
     qc = TRUE,
@@ -39,7 +40,6 @@ volreg <- function(
   control_missing <- missing(control)
   engine_missing <- missing(engine)
   ref <- match.arg(ref)
-  interp_final <- match.arg(interp_final)
   pad_final <- match.arg(pad_final)
   zpad_final <- as.integer(zpad_final)
   if (length(zpad_final) != 1L || is.na(zpad_final) || zpad_final < 0L) {
@@ -50,6 +50,11 @@ volreg <- function(
   }
   prof <- .apply_volreg_profile(control, profile)
   control <- prof$control
+  valid_interp_final <- c("bspline", "lanczos", "lanczos5", "lanczos7", "quintic", "heptic", "linear")
+  if (is.null(interp_final)) {
+    interp_final <- control$interp_final %||% "bspline"
+  }
+  interp_final <- match.arg(interp_final, valid_interp_final)
   if (!is.null(prof$engine) && engine_missing) {
     engine <- prof$engine
   }

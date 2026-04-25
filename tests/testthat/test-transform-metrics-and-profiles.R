@@ -99,6 +99,7 @@ test_that("bare high-level APIs use fast_fmri while dense baseline stays opt-in"
   expect_true(isTRUE(fit_default$control$whiten_modes))
   expect_equal(fit_default$control$edge_exclude_frac, 0.05)
   expect_true(isTRUE(fit_default$control$template_refresh_valid_only))
+  expect_equal(fit_default$control$interp_final, "heptic")
 
   ctl <- utils::modifyList(volreg_control(), list(max_iter = 1L, n_samples = 500L))
   fit_manual <- volreg(x, resample = FALSE, qc = FALSE, control = ctl)
@@ -119,13 +120,14 @@ test_that("fast_fmri profile adds fMRI-specific edge and template safeguards", {
 
   expect_s3_class(prof, "volreg_profile")
   expect_equal(prof$engine, "rigid_robust")
-  expect_true(all(c("fast_native", "edge_exclude", "valid_template_refresh", "parallel_frames") %in% prof$components))
+  expect_true(all(c("fast_native", "edge_exclude", "valid_template_refresh", "parallel_frames", "heptic_final") %in% prof$components))
   expect_true(isTRUE(prof$control$use_ic_stencil))
   expect_true(isTRUE(prof$control$whiten_modes))
   expect_equal(prof$control$stencil_n, 1000L)
   expect_equal(prof$control$edge_exclude_frac, 0.05)
   expect_true(isTRUE(prof$control$template_refresh_valid_only))
   expect_true(isTRUE(prof$control$parallel_frames))
+  expect_equal(prof$control$interp_final, "heptic")
 })
 
 test_that("IC-polish profile keeps IC setup and enables bounded analytic polish", {
@@ -205,12 +207,13 @@ test_that("tuned adaptive-Huber profile uses a conservative residual-scale multi
   prof <- volreg_profile("ic_nuisance_adaptive_tuned")
 
   expect_s3_class(prof, "volreg_profile")
-  expect_true(all(c("adaptive_huber", "huber_0.15", "iter_12", "parallel_frames") %in% prof$components))
+  expect_true(all(c("adaptive_huber", "huber_0.15", "iter_12", "parallel_frames", "heptic_final") %in% prof$components))
   expect_true(isTRUE(prof$control$adaptive_huber))
   expect_true(isTRUE(prof$control$template_refresh_valid_only))
   expect_equal(prof$control$huber_k, 0.15)
   expect_equal(prof$control$max_iter, 12L)
   expect_true(isTRUE(prof$control$parallel_frames))
+  expect_equal(prof$control$interp_final, "heptic")
 })
 
 test_that("guarded adaptive-Huber profile enables common-objective candidate selection", {

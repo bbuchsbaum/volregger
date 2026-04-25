@@ -14,7 +14,7 @@
 apply_motion <- function(
     x,
     motion,
-    interp = c("bspline", "lanczos", "lanczos5", "lanczos7", "linear"),
+    interp = c("bspline", "lanczos", "lanczos5", "lanczos7", "quintic", "heptic", "linear"),
     pad = c("clamp", "zero"),
     zpad = 0L,
     slice_times = NULL,

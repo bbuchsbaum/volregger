@@ -69,8 +69,9 @@ profile <- volreg_profile(
   overrides = profile_overrides
 )
 interp_final <- opts$interp %||% profile$control$interp_final %||% "bspline"
-if (!interp_final %in% c("bspline", "lanczos", "lanczos5", "lanczos7", "linear")) {
-  stop("--interp must be one of: bspline, lanczos, lanczos5, lanczos7, linear", call. = FALSE)
+valid_interps <- c("bspline", "lanczos", "lanczos5", "lanczos7", "quintic", "heptic", "linear")
+if (!interp_final %in% valid_interps) {
+  stop("--interp must be one of: ", paste(valid_interps, collapse = ", "), call. = FALSE)
 }
 if (!opts$pad %in% c("clamp", "zero")) {
   stop("--pad must be one of: clamp, zero", call. = FALSE)
