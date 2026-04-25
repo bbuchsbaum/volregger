@@ -302,6 +302,8 @@ test_that("real-data benchmark scorecard ranks truth metrics by direction", {
   expect_true(all(c("elapsed_sec", "disp_p95", "corr_to_truth", "edge_ratio_to_truth") %in% scorecard$metric))
   expect_true(all(c("role", "claim_metric") %in% names(scorecard)))
   expect_true(scorecard$claim_metric[scorecard$metric == "disp_p95"])
+  expect_false(scorecard$claim_metric[scorecard$metric == "tsnr_ratio"])
+  expect_equal(scorecard$role[scorecard$metric == "tsnr_ratio"], "diagnostic_smoothing")
   expect_identical(scorecard$comparison[scorecard$metric == "disp_p95"], "win")
   expect_identical(scorecard$comparison[scorecard$metric == "corr_to_truth"], "win")
   expect_identical(scorecard$comparison[scorecard$metric == "edge_ratio_to_truth"], "win")

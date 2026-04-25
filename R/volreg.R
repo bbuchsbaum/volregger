@@ -29,7 +29,7 @@ volreg <- function(
     slice_times = NULL,
     mb_groups = NULL,
     resample = TRUE,
-    interp_final = c("bspline", "lanczos", "linear"),
+    interp_final = c("bspline", "lanczos", "lanczos5", "lanczos7", "linear"),
     pad_final = c("clamp", "zero"),
     zpad_final = 0L,
     qc = TRUE,

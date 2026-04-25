@@ -461,7 +461,7 @@ SEXP cpp_volreg_apply(
     pad_mode = 1;
   }
 
-  enum InterpMode { LINEAR = 0, BSPLINE = 1, LANCZOS = 2 };
+  enum InterpMode { LINEAR = 0, BSPLINE = 1, LANCZOS = 2, LANCZOS5 = 3, LANCZOS7 = 4 };
   InterpMode mode = BSPLINE;
   if (interp == "linear") {
     mode = LINEAR;
@@ -469,8 +469,12 @@ SEXP cpp_volreg_apply(
     mode = BSPLINE;
   } else if (interp == "lanczos") {
     mode = LANCZOS;
+  } else if (interp == "lanczos5") {
+    mode = LANCZOS5;
+  } else if (interp == "lanczos7") {
+    mode = LANCZOS7;
   } else {
-    stop("interp must be one of: linear, bspline, lanczos");
+    stop("interp must be one of: linear, bspline, lanczos, lanczos5, lanczos7");
   }
 
   NumericVector out(data.size());
@@ -591,11 +595,23 @@ SEXP cpp_volreg_apply(
             } else {
               v = sample_cubic<false>(frame, nx, ny, nz, src[0], src[1], src[2]);
             }
-          } else {
+          } else if (mode == LANCZOS) {
             if (zero_pad) {
               v = sample_lanczos<true>(frame, nx, ny, nz, src[0], src[1], src[2], 3);
             } else {
               v = sample_lanczos<false>(frame, nx, ny, nz, src[0], src[1], src[2], 3);
+            }
+          } else if (mode == LANCZOS5) {
+            if (zero_pad) {
+              v = sample_lanczos<true>(frame, nx, ny, nz, src[0], src[1], src[2], 5);
+            } else {
+              v = sample_lanczos<false>(frame, nx, ny, nz, src[0], src[1], src[2], 5);
+            }
+          } else {
+            if (zero_pad) {
+              v = sample_lanczos<true>(frame, nx, ny, nz, src[0], src[1], src[2], 7);
+            } else {
+              v = sample_lanczos<false>(frame, nx, ny, nz, src[0], src[1], src[2], 7);
             }
           }
           out_ptr[off + static_cast<size_t>(i + nx * (j + ny * k))] = v;

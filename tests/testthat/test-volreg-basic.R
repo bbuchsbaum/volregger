@@ -194,15 +194,23 @@ test_that("apply_motion interpolation modes are distinct on fractional shifts", 
   y_lin <- apply_motion(x, motion, interp = "linear")
   y_bsp <- apply_motion(x, motion, interp = "bspline")
   y_lan <- apply_motion(x, motion, interp = "lanczos")
+  y_lan5 <- apply_motion(x, motion, interp = "lanczos5")
+  y_lan7 <- apply_motion(x, motion, interp = "lanczos7")
 
   expect_equal(dim(y_lin), dim(x))
   expect_equal(dim(y_bsp), dim(x))
   expect_equal(dim(y_lan), dim(x))
+  expect_equal(dim(y_lan5), dim(x))
+  expect_equal(dim(y_lan7), dim(x))
 
   d1 <- max(abs(y_lin - y_bsp))
   d2 <- max(abs(y_lin - y_lan))
+  d3 <- max(abs(y_lan - y_lan5))
+  d4 <- max(abs(y_lan5 - y_lan7))
   expect_true(d1 > 0)
   expect_true(d2 > 0)
+  expect_true(d3 > 0)
+  expect_true(d4 > 0)
 })
 
 test_that("apply_motion exposes clamp and zero boundary handling", {

@@ -610,7 +610,7 @@ benchmark_scorecard_specs <- function() {
     "claim_truth"
   )
 
-  data.frame(
+  specs <- data.frame(
     metric = metrics,
     direction = ifelse(
       metrics %in% c("corr_to_truth", "temporal_corr_to_truth", "tsnr_ratio"),
@@ -620,9 +620,11 @@ benchmark_scorecard_specs <- function() {
     target = ifelse(metrics == "edge_ratio_to_truth", 1, NA_real_),
     family = family,
     role = role,
-    claim_metric = startsWith(role, "claim_"),
     stringsAsFactors = FALSE
   )
+  specs$role[specs$metric == "tsnr_ratio"] <- "diagnostic_smoothing"
+  specs$claim_metric <- startsWith(specs$role, "claim_")
+  specs
 }
 
 scorecard_metric_result <- function(primary, baseline, direction, target = NA_real_, tolerance = 1e-8) {
