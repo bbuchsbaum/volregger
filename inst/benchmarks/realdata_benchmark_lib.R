@@ -537,10 +537,19 @@ motion_dynamics_error_summary <- function(motion_mats, truth) {
     stop("truth must contain the same number of frames as motion", call. = FALSE)
   }
 
-  fd_est <- fd_from_transform(mats)
-  fd_truth <- fd_from_transform(ref)
-  fd_corr <- if (stats::sd(fd_est, na.rm = TRUE) > 1e-8 && stats::sd(fd_truth, na.rm = TRUE) > 1e-8) {
-    stats::cor(fd_est, fd_truth, use = "complete.obs")
+  # Keep fd_corr_to_truth aligned with the FD name: correlate frame-to-frame
+  # displacement, while fd_abs_corr_to_truth preserves the absolute-pose trace.
+  fd_step_est <- framewise_disp_from_transform(mats)
+  fd_step_truth <- framewise_disp_from_transform(ref)
+  fd_corr <- if (stats::sd(fd_step_est, na.rm = TRUE) > 1e-8 && stats::sd(fd_step_truth, na.rm = TRUE) > 1e-8) {
+    stats::cor(fd_step_est, fd_step_truth, use = "complete.obs")
+  } else {
+    NA_real_
+  }
+  fd_abs_est <- fd_from_transform(mats)
+  fd_abs_truth <- fd_from_transform(ref)
+  fd_abs_corr <- if (stats::sd(fd_abs_est, na.rm = TRUE) > 1e-8 && stats::sd(fd_abs_truth, na.rm = TRUE) > 1e-8) {
+    stats::cor(fd_abs_est, fd_abs_truth, use = "complete.obs")
   } else {
     NA_real_
   }
@@ -559,6 +568,7 @@ motion_dynamics_error_summary <- function(motion_mats, truth) {
 
   list(
     fd_corr_to_truth = fd_corr,
+    fd_abs_corr_to_truth = fd_abs_corr,
     pose_jitter_error = pose_jitter_error
   )
 }
@@ -601,6 +611,7 @@ benchmark_metric_names <- function() {
     "rel_rot_deg_p95",
     "affine_det_error_max",
     "fd_corr_to_truth",
+    "fd_abs_corr_to_truth",
     "pose_jitter_error",
     "corr_to_truth",
     "mse_to_truth",
@@ -663,6 +674,12 @@ benchmark_scorecard_specs <- function() {
       role = "claim_truth",
       stringsAsFactors = FALSE
     ),
+    dynamics_diag = data.frame(
+      metric = "fd_abs_corr_to_truth",
+      family = "truth_dynamics",
+      role = "diagnostic_dynamics",
+      stringsAsFactors = FALSE
+    ),
     image_claim = data.frame(
       metric = c("mse_to_truth", "mae_to_truth", "nrmse_to_truth",
                  "residual_dvars_ratio_to_truth", "corr_to_truth",
@@ -695,13 +712,14 @@ benchmark_scorecard_specs <- function() {
 
   specs <- do.call(rbind, rows)
   specs$direction <- ifelse(
-    specs$metric %in% c("corr_to_truth", "temporal_corr_to_truth", "tsnr_ratio", "fd_corr_to_truth"),
+    specs$metric %in% c("corr_to_truth", "temporal_corr_to_truth", "tsnr_ratio", "fd_corr_to_truth", "fd_abs_corr_to_truth"),
     "higher",
     ifelse(specs$metric == "edge_ratio_to_truth", "target", "lower")
   )
   specs$target <- ifelse(specs$metric == "edge_ratio_to_truth", 1, NA_real_)
   specs$tolerance <- 1e-8
   specs$tolerance[specs$metric == "fd_corr_to_truth"] <- 0.02
+  specs$tolerance[specs$metric == "fd_abs_corr_to_truth"] <- 0.02
   specs$tolerance[specs$metric == "residual_dvars_ratio_to_truth"] <- 0.02
   specs <- specs[, c("metric", "direction", "target", "tolerance", "family", "role")]
   specs$claim_metric <- startsWith(specs$role, "claim_")
@@ -905,6 +923,7 @@ compute_benchmark_metrics <- function(input_run, corrected, mask, motion_mats, t
     out$rel_rot_deg_p95 <- NA_real_
     out$affine_det_error_max <- NA_real_
     out$fd_corr_to_truth <- NA_real_
+    out$fd_abs_corr_to_truth <- NA_real_
     out$pose_jitter_error <- NA_real_
   }
 
