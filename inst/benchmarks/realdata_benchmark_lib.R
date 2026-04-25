@@ -855,6 +855,116 @@ summarize_benchmark_scorecard <- function(scorecard, claim_only = FALSE) {
   )
 }
 
+no_regression_gate_specs <- function() {
+  data.frame(
+    metric = c(
+      "disp_p95",
+      "fd_error",
+      "fd_corr_to_truth",
+      "pose_jitter_error",
+      "nrmse_to_truth",
+      "edge_error_to_truth",
+      "truth_image_fidelity_loss",
+      "tsnr_ratio"
+    ),
+    direction = c("lower", "lower", "higher", "lower", "lower", "lower", "lower", "higher"),
+    tolerance = c(1e-8, 1e-8, 0.02, 1e-8, 1e-8, 1e-8, 1e-8, 1e-8),
+    role = c(
+      "truth_displacement",
+      "truth_dynamics",
+      "truth_dynamics",
+      "truth_dynamics",
+      "truth_image",
+      "truth_image",
+      "truth_image",
+      "diagnostic_tsnr"
+    ),
+    stringsAsFactors = FALSE
+  )
+}
+
+make_no_regression_gate <- function(raw, primary_method = "volregger", truth_only = TRUE) {
+  specs <- no_regression_gate_specs()
+  if (isTRUE(truth_only)) {
+    raw <- raw[raw$dataset_mode == "truth_injected", , drop = FALSE]
+  }
+  scenarios <- unique(raw$scenario)
+  rows <- list()
+  row_idx <- 1L
+
+  for (scenario_name in scenarios) {
+    primary <- raw[raw$scenario == scenario_name & raw$method == primary_method & raw$status == "ok", , drop = FALSE]
+    if (nrow(primary) != 1L) {
+      next
+    }
+    baselines <- raw[raw$scenario == scenario_name & raw$method != primary_method & raw$status == "ok", , drop = FALSE]
+    if (!nrow(baselines)) {
+      next
+    }
+
+    for (baseline_idx in seq_len(nrow(baselines))) {
+      baseline <- baselines[baseline_idx, , drop = FALSE]
+      for (spec_idx in seq_len(nrow(specs))) {
+        metric <- specs$metric[spec_idx]
+        if (!metric %in% names(raw)) {
+          next
+        }
+        result <- scorecard_metric_result(
+          primary = primary[[metric]],
+          baseline = baseline[[metric]],
+          direction = specs$direction[spec_idx],
+          tolerance = specs$tolerance[spec_idx]
+        )
+        rows[[row_idx]] <- data.frame(
+          scenario = scenario_name,
+          dataset_mode = primary$dataset_mode,
+          baseline = baseline$method,
+          metric = metric,
+          role = specs$role[spec_idx],
+          direction = specs$direction[spec_idx],
+          tolerance = specs$tolerance[spec_idx],
+          primary_value = primary[[metric]],
+          baseline_value = baseline[[metric]],
+          primary_margin = result$primary_margin,
+          primary_ratio = result$primary_ratio,
+          comparison = result$comparison,
+          no_regression_pass = result$comparison %in% c("win", "tie"),
+          stringsAsFactors = FALSE
+        )
+        row_idx <- row_idx + 1L
+      }
+    }
+  }
+
+  if (length(rows)) {
+    do.call(rbind, rows)
+  } else {
+    data.frame()
+  }
+}
+
+summarize_no_regression_gate <- function(gate) {
+  if (!nrow(gate)) {
+    return(data.frame())
+  }
+  aggregate(
+    x = list(
+      metrics_available = gate$comparison != "unavailable",
+      wins = gate$comparison == "win",
+      regressions = gate$comparison == "loss",
+      ties = gate$comparison == "tie",
+      passes = gate$no_regression_pass %in% TRUE
+    ),
+    by = list(
+      scenario = gate$scenario,
+      dataset_mode = gate$dataset_mode,
+      baseline = gate$baseline
+    ),
+    FUN = sum,
+    na.rm = TRUE
+  )
+}
+
 summarize_interpolation_guardrail <- function(raw, baseline_interp = "lanczos") {
   required <- c("interp", "scenario", "dataset_mode", "method", "status")
   missing <- setdiff(required, names(raw))

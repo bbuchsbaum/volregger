@@ -458,12 +458,18 @@ utils::write.csv(raw, raw_csv, row.names = FALSE)
 scorecard <- make_benchmark_scorecard(raw)
 scorecard_summary <- summarize_benchmark_scorecard(scorecard)
 scorecard_claim_summary <- summarize_benchmark_scorecard(scorecard, claim_only = TRUE)
+no_regression_gate <- make_no_regression_gate(raw)
+no_regression_summary <- summarize_no_regression_gate(no_regression_gate)
 scorecard_csv <- file.path(out_dir, "benchmark_vs_nifreeze_realdata_scorecard.csv")
 scorecard_summary_csv <- file.path(out_dir, "benchmark_vs_nifreeze_realdata_scorecard_summary.csv")
 scorecard_claim_summary_csv <- file.path(out_dir, "benchmark_vs_nifreeze_realdata_claim_summary.csv")
+no_regression_csv <- file.path(out_dir, "benchmark_vs_nifreeze_realdata_no_regression.csv")
+no_regression_summary_csv <- file.path(out_dir, "benchmark_vs_nifreeze_realdata_no_regression_summary.csv")
 utils::write.csv(scorecard, scorecard_csv, row.names = FALSE)
 utils::write.csv(scorecard_summary, scorecard_summary_csv, row.names = FALSE)
 utils::write.csv(scorecard_claim_summary, scorecard_claim_summary_csv, row.names = FALSE)
+utils::write.csv(no_regression_gate, no_regression_csv, row.names = FALSE)
+utils::write.csv(no_regression_summary, no_regression_summary_csv, row.names = FALSE)
 
 safe_ratio <- function(x, y) {
   if (!is.finite(x) || !is.finite(y)) {
@@ -604,6 +610,8 @@ cat(" -", raw_csv, "\n")
 cat(" -", scorecard_csv, "\n")
 cat(" -", scorecard_summary_csv, "\n")
 cat(" -", scorecard_claim_summary_csv, "\n")
+cat(" -", no_regression_csv, "\n")
+cat(" -", no_regression_summary_csv, "\n")
 cat(" -", paired_csv, "\n")
 cat(" -", solution_summary_csv, "\n")
 cat(" -", solution_frames_csv, "\n")
@@ -637,4 +645,9 @@ if (nrow(scorecard_summary)) {
 if (nrow(scorecard_claim_summary)) {
   cat("\nClaim-metric summary:\n")
   print(scorecard_claim_summary)
+}
+
+if (nrow(no_regression_summary)) {
+  cat("\nNo-regression gate summary:\n")
+  print(no_regression_summary)
 }

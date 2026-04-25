@@ -353,6 +353,66 @@ test_that("real-data benchmark scorecard ranks truth metrics by direction", {
   expect_equal(sum(claim_summary$losses), 0)
 })
 
+test_that("real-data benchmark no-regression gate includes protected diagnostics", {
+  env <- new.env(parent = globalenv())
+  source(testthat::test_path("..", "..", "inst", "benchmarks", "realdata_benchmark_lib.R"), local = env)
+
+  metric_names <- env$benchmark_metric_names()
+  make_row <- function(method, fd_corr_to_truth, tsnr_ratio) {
+    metric_vals <- stats::setNames(rep(NA_real_, length(metric_names)), metric_names)
+    metric_vals[["disp_p95"]] <- if (identical(method, "volregger")) 0.8 else 1.0
+    metric_vals[["fd_error"]] <- if (identical(method, "volregger")) 0.6 else 0.9
+    metric_vals[["fd_corr_to_truth"]] <- fd_corr_to_truth
+    metric_vals[["pose_jitter_error"]] <- if (identical(method, "volregger")) 0.02 else 0.04
+    metric_vals[["nrmse_to_truth"]] <- if (identical(method, "volregger")) 0.08 else 0.10
+    metric_vals[["edge_error_to_truth"]] <- if (identical(method, "volregger")) 0.04 else 0.08
+    metric_vals[["truth_image_fidelity_loss"]] <- if (identical(method, "volregger")) 0.12 else 0.20
+    metric_vals[["tsnr_ratio"]] <- tsnr_ratio
+    cbind(
+      data.frame(
+        method = method,
+        dataset_mode = "truth_injected",
+        scenario = "low_motion",
+        method_model = method,
+        elapsed_sec = NA_real_,
+        estimate_sec = NA_real_,
+        apply_sec = NA_real_,
+        report_sec = NA_real_,
+        peak_rss_mb = NA_real_,
+        temp_bytes_written = NA_real_,
+        status = "ok",
+        error = NA_character_,
+        stringsAsFactors = FALSE
+      ),
+      as.data.frame(as.list(metric_vals), stringsAsFactors = FALSE)
+    )
+  }
+
+  raw <- rbind(
+    make_row("volregger", fd_corr_to_truth = 0.97, tsnr_ratio = 3.0),
+    make_row("afni_3dvolreg", fd_corr_to_truth = 0.98, tsnr_ratio = 4.0)
+  )
+  gate <- env$make_no_regression_gate(raw)
+  summary <- env$summarize_no_regression_gate(gate)
+
+  expect_equal(
+    sort(gate$metric),
+    sort(c(
+      "disp_p95",
+      "fd_error",
+      "fd_corr_to_truth",
+      "pose_jitter_error",
+      "nrmse_to_truth",
+      "edge_error_to_truth",
+      "truth_image_fidelity_loss",
+      "tsnr_ratio"
+    ))
+  )
+  expect_identical(gate$comparison[gate$metric == "fd_corr_to_truth"], "tie")
+  expect_identical(gate$comparison[gate$metric == "tsnr_ratio"], "loss")
+  expect_equal(summary$regressions, 1)
+})
+
 test_that("interpolation guardrail summary reports deltas from baseline", {
   env <- new.env(parent = globalenv())
   source(testthat::test_path("..", "..", "inst", "benchmarks", "realdata_benchmark_lib.R"), local = env)
