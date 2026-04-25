@@ -503,6 +503,7 @@ for (sc in scenario_names) {
 }
 fd_truth_summary <- if (length(fd_truth_summary_rows)) do.call(rbind, fd_truth_summary_rows) else data.frame()
 fd_truth_frames <- if (length(fd_truth_frame_rows)) do.call(rbind, fd_truth_frame_rows) else data.frame()
+fd_truth_comparison <- make_fd_truth_comparison(fd_truth_frames)
 scorecard_csv <- file.path(out_dir, "benchmark_vs_nifreeze_realdata_scorecard.csv")
 scorecard_summary_csv <- file.path(out_dir, "benchmark_vs_nifreeze_realdata_scorecard_summary.csv")
 scorecard_claim_summary_csv <- file.path(out_dir, "benchmark_vs_nifreeze_realdata_claim_summary.csv")
@@ -511,6 +512,8 @@ no_regression_summary_csv <- file.path(out_dir, "benchmark_vs_nifreeze_realdata_
 tsnr_context_csv <- file.path(out_dir, "benchmark_vs_nifreeze_realdata_tsnr_context.csv")
 fd_truth_summary_csv <- file.path(out_dir, "benchmark_vs_nifreeze_realdata_fd_truth_summary.csv")
 fd_truth_frames_csv <- file.path(out_dir, "benchmark_vs_nifreeze_realdata_fd_truth_frames.csv")
+fd_truth_comparison_summary_csv <- file.path(out_dir, "benchmark_vs_nifreeze_realdata_fd_truth_comparison_summary.csv")
+fd_truth_comparison_frames_csv <- file.path(out_dir, "benchmark_vs_nifreeze_realdata_fd_truth_comparison_frames.csv")
 utils::write.csv(scorecard, scorecard_csv, row.names = FALSE)
 utils::write.csv(scorecard_summary, scorecard_summary_csv, row.names = FALSE)
 utils::write.csv(scorecard_claim_summary, scorecard_claim_summary_csv, row.names = FALSE)
@@ -519,6 +522,8 @@ utils::write.csv(no_regression_summary, no_regression_summary_csv, row.names = F
 utils::write.csv(tsnr_context, tsnr_context_csv, row.names = FALSE)
 utils::write.csv(fd_truth_summary, fd_truth_summary_csv, row.names = FALSE)
 utils::write.csv(fd_truth_frames, fd_truth_frames_csv, row.names = FALSE)
+utils::write.csv(fd_truth_comparison$summary, fd_truth_comparison_summary_csv, row.names = FALSE)
+utils::write.csv(fd_truth_comparison$frames, fd_truth_comparison_frames_csv, row.names = FALSE)
 
 safe_ratio <- function(x, y) {
   if (!is.finite(x) || !is.finite(y)) {
@@ -664,6 +669,8 @@ cat(" -", no_regression_summary_csv, "\n")
 cat(" -", tsnr_context_csv, "\n")
 cat(" -", fd_truth_summary_csv, "\n")
 cat(" -", fd_truth_frames_csv, "\n")
+cat(" -", fd_truth_comparison_summary_csv, "\n")
+cat(" -", fd_truth_comparison_frames_csv, "\n")
 cat(" -", paired_csv, "\n")
 cat(" -", solution_summary_csv, "\n")
 cat(" -", solution_frames_csv, "\n")

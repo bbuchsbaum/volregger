@@ -654,6 +654,101 @@ motion_truth_fd_diagnostics <- function(motion_mats, truth, radius = 50) {
   list(summary = summary, frames = frames)
 }
 
+make_fd_truth_comparison <- function(fd_truth_frames, primary_method = "volregger") {
+  required <- c("scenario", "dataset_mode", "method", "frame", "fd_step_abs_error", "fd_step_error", "pose_step_error")
+  missing <- setdiff(required, names(fd_truth_frames))
+  if (length(missing)) {
+    stop("fd_truth_frames is missing required columns: ", paste(missing, collapse = ", "), call. = FALSE)
+  }
+  primary <- fd_truth_frames[fd_truth_frames$method == primary_method, , drop = FALSE]
+  baselines <- fd_truth_frames[fd_truth_frames$method != primary_method, , drop = FALSE]
+  if (!nrow(primary) || !nrow(baselines)) {
+    return(list(summary = data.frame(), frames = data.frame()))
+  }
+
+  rows <- list()
+  idx <- 1L
+  key_cols <- c("scenario", "dataset_mode", "frame")
+  for (baseline_method in unique(baselines$method)) {
+    baseline <- baselines[baselines$method == baseline_method, , drop = FALSE]
+    merged <- merge(
+      primary,
+      baseline,
+      by = key_cols,
+      suffixes = c("_primary", "_baseline")
+    )
+    if (!nrow(merged)) {
+      next
+    }
+    rows[[idx]] <- data.frame(
+      scenario = merged$scenario,
+      dataset_mode = merged$dataset_mode,
+      frame = merged$frame,
+      primary = primary_method,
+      baseline = baseline_method,
+      primary_fd_step_abs_error = merged$fd_step_abs_error_primary,
+      baseline_fd_step_abs_error = merged$fd_step_abs_error_baseline,
+      fd_step_abs_error_margin = merged$fd_step_abs_error_baseline - merged$fd_step_abs_error_primary,
+      primary_fd_step_error = merged$fd_step_error_primary,
+      baseline_fd_step_error = merged$fd_step_error_baseline,
+      primary_pose_step_error = merged$pose_step_error_primary,
+      baseline_pose_step_error = merged$pose_step_error_baseline,
+      pose_step_error_margin = merged$pose_step_error_baseline - merged$pose_step_error_primary,
+      primary_closer_fd = merged$fd_step_abs_error_primary < merged$fd_step_abs_error_baseline,
+      baseline_closer_fd = merged$fd_step_abs_error_baseline < merged$fd_step_abs_error_primary,
+      stringsAsFactors = FALSE
+    )
+    idx <- idx + 1L
+  }
+
+  frames <- if (length(rows)) do.call(rbind, rows) else data.frame()
+  if (!nrow(frames)) {
+    return(list(summary = data.frame(), frames = frames))
+  }
+
+  summary <- aggregate(
+    x = list(
+      frames = frames$frame,
+      primary_fd_wins = frames$primary_closer_fd,
+      baseline_fd_wins = frames$baseline_closer_fd,
+      fd_step_abs_error_margin_mean = frames$fd_step_abs_error_margin,
+      fd_step_abs_error_margin_median = frames$fd_step_abs_error_margin,
+      pose_step_error_margin_mean = frames$pose_step_error_margin
+    ),
+    by = list(
+      scenario = frames$scenario,
+      dataset_mode = frames$dataset_mode,
+      primary = frames$primary,
+      baseline = frames$baseline
+    ),
+    FUN = function(x) {
+      if (is.logical(x)) {
+        return(sum(x, na.rm = TRUE))
+      }
+      if (is.integer(x)) {
+        return(length(x))
+      }
+      mean(x, na.rm = TRUE)
+    }
+  )
+  median_margin <- aggregate(
+    x = list(fd_step_abs_error_margin_median = frames$fd_step_abs_error_margin),
+    by = list(
+      scenario = frames$scenario,
+      dataset_mode = frames$dataset_mode,
+      primary = frames$primary,
+      baseline = frames$baseline
+    ),
+    FUN = stats::median,
+    na.rm = TRUE
+  )
+  summary$fd_step_abs_error_margin_median <- median_margin$fd_step_abs_error_margin_median
+  summary$primary_fd_win_rate <- summary$primary_fd_wins / pmax(summary$frames, 1)
+  summary$baseline_fd_win_rate <- summary$baseline_fd_wins / pmax(summary$frames, 1)
+
+  list(summary = summary, frames = frames)
+}
+
 benchmark_metric_names <- function() {
   c(
     "fit_fail_rate",

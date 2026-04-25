@@ -20,6 +20,8 @@ volreg_profile <- function(
       "ic_nuisance_adaptive_tuned",
       "ic_nuisance_adaptive_guarded",
       "ic_nuisance_polish",
+      "ic_nuisance_kernel_polish",
+      "ic_nuisance_temporal_guard",
       "ic_nuisance_full",
       "slice_spline"
     ),
@@ -195,6 +197,49 @@ volreg_profile <- function(
         use_ic_polish = TRUE,
         polish_iter = 3L,
         polish_n_samples = 2000L
+      )
+    ),
+    ic_nuisance_kernel_polish = list(
+      engine = "rigid_robust",
+      components = c("capture_boost", "ic_stencil", "whiten", "nuisance", "adaptive_huber", "huber_0.15", "iter_12", "parallel_frames", "dense_polish", "kernel_matched_polish"),
+      control = list(
+        use_ic_stencil = TRUE,
+        whiten_modes = TRUE,
+        use_nuisance_marginalization = TRUE,
+        nuisance_include_template = FALSE,
+        nuisance_orthogonalize = TRUE,
+        nuisance_ridge = 1e-4,
+        adaptive_huber = TRUE,
+        template_refresh_valid_only = TRUE,
+        huber_k = 0.15,
+        max_iter = 12L,
+        parallel_frames = TRUE,
+        use_dense_polish = TRUE,
+        polish_iter = 2L,
+        polish_n_samples = 1500L,
+        dense_polish_interp = "lanczos"
+      )
+    ),
+    ic_nuisance_temporal_guard = list(
+      engine = "rigid_robust",
+      components = c("capture_boost", "ic_stencil", "whiten", "nuisance", "adaptive_huber", "huber_0.15", "iter_12", "parallel_frames", "temporal_guard"),
+      control = list(
+        use_ic_stencil = TRUE,
+        whiten_modes = TRUE,
+        use_nuisance_marginalization = TRUE,
+        nuisance_include_template = FALSE,
+        nuisance_orthogonalize = TRUE,
+        nuisance_ridge = 1e-4,
+        adaptive_huber = TRUE,
+        template_refresh_valid_only = TRUE,
+        huber_k = 0.15,
+        max_iter = 12L,
+        parallel_frames = TRUE,
+        use_temporal_regularization = TRUE,
+        temporal_regularization_iter = 1L,
+        temporal_regularization_alpha = 0.25,
+        temporal_regularization_cost_tol = 0.002,
+        temporal_regularization_fd_max = 0.8
       )
     ),
     ic_nuisance_full = list(

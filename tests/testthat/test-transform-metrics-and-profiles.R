@@ -144,6 +144,31 @@ test_that("IC-polish profile keeps IC setup and enables bounded analytic polish"
   expect_equal(prof$control$polish_n_samples, 2000L)
 })
 
+test_that("kernel-polish profile enables opt-in final-kernel dense polish", {
+  prof <- volreg_profile("ic_nuisance_kernel_polish")
+
+  expect_s3_class(prof, "volreg_profile")
+  expect_true(all(c("dense_polish", "kernel_matched_polish") %in% prof$components))
+  expect_true(isTRUE(prof$control$use_ic_stencil))
+  expect_true(isTRUE(prof$control$use_dense_polish))
+  expect_false(isTRUE(prof$control$use_ic_polish))
+  expect_equal(prof$control$dense_polish_interp, "lanczos")
+  expect_equal(prof$control$polish_iter, 2L)
+  expect_equal(prof$control$polish_n_samples, 1500L)
+})
+
+test_that("temporal-guard profile enables objective-gated low-motion smoothing", {
+  prof <- volreg_profile("ic_nuisance_temporal_guard")
+
+  expect_s3_class(prof, "volreg_profile")
+  expect_true("temporal_guard" %in% prof$components)
+  expect_true(isTRUE(prof$control$use_temporal_regularization))
+  expect_equal(prof$control$temporal_regularization_iter, 1L)
+  expect_equal(prof$control$temporal_regularization_alpha, 0.25)
+  expect_equal(prof$control$temporal_regularization_fd_max, 0.8)
+  expect_true(isTRUE(prof$control$parallel_frames))
+})
+
 test_that("adaptive-Huber profile keeps IC setup and scales robust threshold", {
   prof <- volreg_profile("ic_nuisance_adaptive")
 
@@ -322,6 +347,31 @@ test_that("real-data benchmark FD diagnostics expose framewise truth errors", {
     stats::cor(diag$frames$fd_step_est, diag$frames$fd_step_truth),
     tolerance = 1e-12
   )
+})
+
+test_that("FD truth comparison attributes framewise wins against baselines", {
+  env <- new.env(parent = globalenv())
+  source(testthat::test_path("..", "..", "inst", "benchmarks", "realdata_benchmark_lib.R"), local = env)
+
+  fd_frames <- data.frame(
+    scenario = rep("low_motion", 6),
+    dataset_mode = rep("truth_injected", 6),
+    method = rep(c("volregger", "afni_3dvolreg"), each = 3),
+    frame = rep(1:3, times = 2),
+    fd_step_abs_error = c(0.0, 0.1, 0.3, 0.0, 0.2, 0.1),
+    fd_step_error = c(0.0, 0.1, 0.3, 0.0, -0.2, 0.1),
+    pose_step_error = c(NA, 0.05, 0.20, NA, 0.08, 0.10),
+    stringsAsFactors = FALSE
+  )
+
+  cmp <- env$make_fd_truth_comparison(fd_frames)
+
+  expect_equal(nrow(cmp$frames), 3)
+  expect_equal(cmp$summary$primary_fd_wins, 1)
+  expect_equal(cmp$summary$baseline_fd_wins, 1)
+  expect_equal(cmp$summary$primary_fd_win_rate, 1 / 3)
+  expect_equal(cmp$summary$fd_step_abs_error_margin_mean, mean(c(0, 0.1, -0.2)))
+  expect_true(all(c("fd_step_abs_error_margin", "pose_step_error_margin") %in% names(cmp$frames)))
 })
 
 test_that("real-data benchmark scorecard ranks truth metrics by direction", {

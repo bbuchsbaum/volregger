@@ -107,6 +107,16 @@ Pose6 scale_pose(const Pose6& a, double s) {
   return make_pose(a.tx * s, a.ty * s, a.tz * s, a.rx * s, a.ry * s, a.rz * s);
 }
 
+double pose_step_norm(const Pose6& a, const Pose6& b, double radius = 50.0) {
+  double dtx = a.tx - b.tx;
+  double dty = a.ty - b.ty;
+  double dtz = a.tz - b.tz;
+  double drx = (a.rx - b.rx) * radius;
+  double dry = (a.ry - b.ry) * radius;
+  double drz = (a.rz - b.rz) * radius;
+  return std::sqrt(dtx * dtx + dty * dty + dtz * dtz + drx * drx + dry * dry + drz * drz);
+}
+
 NumericVector extract_ref_volume(const NumericVector& data,
                                  int nx,
                                  int ny,
@@ -413,6 +423,8 @@ struct CostResult {
 bool solve_linear6(double* A, double* b, double* x);
 bool solve_linear_small(double* A, double* b, int n, double* x);
 
+enum EstimateInterpMode { EST_LINEAR = 0, EST_CUBIC = 1, EST_LANCZOS = 2 };
+
 double sample_trilinear_frame(const NumericVector& data,
                               int nx,
                               int ny,
@@ -463,6 +475,129 @@ double sample_trilinear_frame(const NumericVector& data,
   double c1 = c01 * (1.0 - ay) + c11 * ay;
 
   return c0 * (1.0 - az) + c1 * az;
+}
+
+inline double cubic_weight(double x) {
+  const double a = -0.5;
+  x = std::abs(x);
+  if (x < 1.0) {
+    return (a + 2.0) * x * x * x - (a + 3.0) * x * x + 1.0;
+  }
+  if (x < 2.0) {
+    return a * x * x * x - 5.0 * a * x * x + 8.0 * a * x - 4.0 * a;
+  }
+  return 0.0;
+}
+
+double sample_cubic_frame(const NumericVector& data,
+                          int nx,
+                          int ny,
+                          int nz,
+                          int nxyz,
+                          int t,
+                          double x,
+                          double y,
+                          double z) {
+  int x0 = static_cast<int>(std::floor(x)) - 1;
+  int y0 = static_cast<int>(std::floor(y)) - 1;
+  int z0 = static_cast<int>(std::floor(z)) - 1;
+  size_t off = static_cast<size_t>(nxyz) * t;
+  double out = 0.0;
+  double wsum = 0.0;
+
+  for (int kk = 0; kk < 4; ++kk) {
+    int zk = clamp_int(z0 + kk, 0, nz - 1);
+    double wz = cubic_weight(z - (z0 + kk));
+    for (int jj = 0; jj < 4; ++jj) {
+      int yj = clamp_int(y0 + jj, 0, ny - 1);
+      double wy = cubic_weight(y - (y0 + jj));
+      for (int ii = 0; ii < 4; ++ii) {
+        int xi = clamp_int(x0 + ii, 0, nx - 1);
+        double wx = cubic_weight(x - (x0 + ii));
+        double w = wx * wy * wz;
+        out += w * data[off + static_cast<size_t>(xi + nx * (yj + ny * zk))];
+        wsum += w;
+      }
+    }
+  }
+  return wsum == 0.0 ? 0.0 : out / wsum;
+}
+
+inline double sinc_pi(double x) {
+  if (std::abs(x) < 1e-8) {
+    return 1.0;
+  }
+  double px = M_PI * x;
+  return std::sin(px) / px;
+}
+
+inline double lanczos_weight(double x, int a) {
+  x = std::abs(x);
+  if (x >= a) {
+    return 0.0;
+  }
+  return sinc_pi(x) * sinc_pi(x / static_cast<double>(a));
+}
+
+double sample_lanczos_frame(const NumericVector& data,
+                            int nx,
+                            int ny,
+                            int nz,
+                            int nxyz,
+                            int t,
+                            double x,
+                            double y,
+                            double z,
+                            int a = 3) {
+  int x0 = static_cast<int>(std::floor(x)) - a + 1;
+  int y0 = static_cast<int>(std::floor(y)) - a + 1;
+  int z0 = static_cast<int>(std::floor(z)) - a + 1;
+  int width = 2 * a;
+  size_t off = static_cast<size_t>(nxyz) * t;
+  double out = 0.0;
+  double wsum = 0.0;
+
+  for (int kk = 0; kk < width; ++kk) {
+    int zk_raw = z0 + kk;
+    int zk = clamp_int(zk_raw, 0, nz - 1);
+    double wz = lanczos_weight(z - zk_raw, a);
+    if (wz == 0.0) continue;
+    for (int jj = 0; jj < width; ++jj) {
+      int yj_raw = y0 + jj;
+      int yj = clamp_int(yj_raw, 0, ny - 1);
+      double wy = lanczos_weight(y - yj_raw, a);
+      if (wy == 0.0) continue;
+      for (int ii = 0; ii < width; ++ii) {
+        int xi_raw = x0 + ii;
+        int xi = clamp_int(xi_raw, 0, nx - 1);
+        double wx = lanczos_weight(x - xi_raw, a);
+        if (wx == 0.0) continue;
+        double w = wx * wy * wz;
+        out += w * data[off + static_cast<size_t>(xi + nx * (yj + ny * zk))];
+        wsum += w;
+      }
+    }
+  }
+  return wsum == 0.0 ? 0.0 : out / wsum;
+}
+
+double sample_estimator_frame(const NumericVector& data,
+                              int nx,
+                              int ny,
+                              int nz,
+                              int nxyz,
+                              int t,
+                              double x,
+                              double y,
+                              double z,
+                              EstimateInterpMode mode) {
+  if (mode == EST_CUBIC) {
+    return sample_cubic_frame(data, nx, ny, nz, nxyz, t, x, y, z);
+  }
+  if (mode == EST_LANCZOS) {
+    return sample_lanczos_frame(data, nx, ny, nz, nxyz, t, x, y, z, 3);
+  }
+  return sample_trilinear_frame(data, nx, ny, nz, nxyz, t, x, y, z);
 }
 
 inline void fixed_to_moving_vox(int i,
@@ -517,7 +652,8 @@ CostResult evaluate_cost(const NumericVector& data,
                          const std::vector<int>& sample_points,
                          const Pose6& pose,
                          double huber_k,
-                         bool use_overlap_taper) {
+                         bool use_overlap_taper,
+                         EstimateInterpMode interp_mode = EST_LINEAR) {
   double ss = 0.0;
   double n = 0.0;
   double inb = 0.0;
@@ -533,7 +669,7 @@ CostResult evaluate_cost(const NumericVector& data,
     fixed_to_moving_vox(i, j, k, nx, ny, nz, pixdim, pose, src, &in_bounds);
     double mv = 0.0;
     if (in_bounds) {
-      mv = sample_trilinear_frame(data, nx, ny, nz, nxyz, t, src[0], src[1], src[2]);
+      mv = sample_estimator_frame(data, nx, ny, nz, nxyz, t, src[0], src[1], src[2], interp_mode);
       inb += 1.0;
     }
     double r = mv - tmpl[v];
@@ -574,7 +710,8 @@ double estimate_residual_sigma_dense(const NumericVector& data,
                                      int t,
                                      const NumericVector& pixdim,
                                      const std::vector<int>& sample_points,
-                                     const Pose6& pose) {
+                                     const Pose6& pose,
+                                     EstimateInterpMode interp_mode = EST_LINEAR) {
   std::vector<double> residuals;
   residuals.reserve(sample_points.size());
   double src[3];
@@ -590,7 +727,7 @@ double estimate_residual_sigma_dense(const NumericVector& data,
     if (!in_bounds) {
       continue;
     }
-    double mv = sample_trilinear_frame(data, nx, ny, nz, nxyz, t, src[0], src[1], src[2]);
+    double mv = sample_estimator_frame(data, nx, ny, nz, nxyz, t, src[0], src[1], src[2], interp_mode);
     residuals.push_back(mv - tmpl[v]);
   }
 
@@ -2078,7 +2215,8 @@ FrameFit optimize_frame_pose(const NumericVector& data,
                              bool capture_boost,
                              double capture_trans_mm,
                              double capture_rot_deg,
-                             int capture_topk) {
+                             int capture_topk,
+                             EstimateInterpMode interp_mode = EST_LINEAR) {
   std::vector<Pose6> seeds;
   int n_keep = std::max(n_restarts, capture_boost ? capture_topk : n_restarts);
   if (n_keep > 0 || capture_boost) {
@@ -2089,7 +2227,7 @@ FrameFit optimize_frame_pose(const NumericVector& data,
         cand,
         n_keep,
         [&](const Pose6& p) {
-          return evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, p, huber_k, use_overlap_taper).cost;
+          return evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, p, huber_k, use_overlap_taper, interp_mode).cost;
         });
   } else {
     seeds.push_back(init_pose);
@@ -2097,7 +2235,7 @@ FrameFit optimize_frame_pose(const NumericVector& data,
 
   Pose6 best_pose = init_pose;
   CostResult best_eval =
-      evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, init_pose, huber_k, use_overlap_taper);
+      evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, init_pose, huber_k, use_overlap_taper, interp_mode);
   double best_c_init = best_eval.cost;
   double best_c_final = best_eval.cost;
   int best_iters = 0;
@@ -2116,12 +2254,12 @@ FrameFit optimize_frame_pose(const NumericVector& data,
     double huber_eff = huber_k;
     if (adaptive_huber) {
       double sigma = estimate_residual_sigma_dense(
-          data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, cur);
+          data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, cur, interp_mode);
       huber_eff = std::max(1e-6, huber_k * sigma);
     }
     double lambda = lambda0;
     CostResult eval0 =
-        evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, cur, huber_eff, use_overlap_taper);
+        evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, cur, huber_eff, use_overlap_taper, interp_mode);
     double c_init = eval0.cost;
     double c_prev = c_init;
     int used_iters = 0;
@@ -2155,10 +2293,10 @@ FrameFit optimize_frame_pose(const NumericVector& data,
         Pose6 p_minus = set_param(cur, d, v - h[d]);
 
         double cp =
-            evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, p_plus, huber_eff, use_overlap_taper)
+            evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, p_plus, huber_eff, use_overlap_taper, interp_mode)
                 .cost;
         double cm =
-            evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, p_minus, huber_eff, use_overlap_taper)
+            evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, p_minus, huber_eff, use_overlap_taper, interp_mode)
                 .cost;
 
         grad[d] = (cp - cm) / (2.0 * h[d]);
@@ -2185,7 +2323,7 @@ FrameFit optimize_frame_pose(const NumericVector& data,
 
       for (int ls = 0; ls < 8; ++ls) {
         Pose6 cand = add_pose(cur, scale_pose(delta, alpha));
-        c_new = evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, cand, huber_eff, use_overlap_taper)
+        c_new = evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, cand, huber_eff, use_overlap_taper, interp_mode)
                     .cost;
         if (c_new < c_prev) {
           cur = cand;
@@ -2209,7 +2347,7 @@ FrameFit optimize_frame_pose(const NumericVector& data,
     }
 
     CostResult evalf =
-        evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, cur, huber_eff, use_overlap_taper);
+        evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, cur, huber_eff, use_overlap_taper, interp_mode);
 
     if (evalf.cost < best_c_final) {
       best_pose = cur;
@@ -2405,6 +2543,26 @@ double get_dbl_ctrl(const List& control, const std::string& name, double default
   return as<double>(control[name]);
 }
 
+std::string get_string_ctrl(const List& control, const std::string& name, const std::string& default_value) {
+  if (!control.containsElementNamed(name.c_str())) {
+    return default_value;
+  }
+  return as<std::string>(control[name]);
+}
+
+EstimateInterpMode parse_estimate_interp(const std::string& name) {
+  if (name == "linear" || name == "trilinear") {
+    return EST_LINEAR;
+  }
+  if (name == "bspline" || name == "cubic") {
+    return EST_CUBIC;
+  }
+  if (name == "lanczos") {
+    return EST_LANCZOS;
+  }
+  stop("estimator interpolation must be one of: linear, bspline, cubic, lanczos");
+}
+
 }  // namespace
 
 // [[Rcpp::export]]
@@ -2528,6 +2686,18 @@ List cpp_volreg_estimate(
   }
   int polish_iter = get_int_ctrl(control, "polish_iter", 5);
   int polish_n_samples = get_int_ctrl(control, "polish_n_samples", 0);
+  EstimateInterpMode dense_interp =
+      parse_estimate_interp(get_string_ctrl(control, "dense_interp", "linear"));
+  EstimateInterpMode dense_polish_interp =
+      parse_estimate_interp(get_string_ctrl(control, "dense_polish_interp", "linear"));
+  bool use_temporal_regularization = false;
+  if (control.containsElementNamed("use_temporal_regularization")) {
+    use_temporal_regularization = as<bool>(control["use_temporal_regularization"]);
+  }
+  int temporal_regularization_iter = get_int_ctrl(control, "temporal_regularization_iter", 1);
+  double temporal_regularization_alpha = get_dbl_ctrl(control, "temporal_regularization_alpha", 0.25);
+  double temporal_regularization_cost_tol = get_dbl_ctrl(control, "temporal_regularization_cost_tol", 0.002);
+  double temporal_regularization_fd_max = get_dbl_ctrl(control, "temporal_regularization_fd_max", 0.8);
   bool parallel_frames = false;
   if (control.containsElementNamed("parallel_frames")) {
     parallel_frames = as<bool>(control["parallel_frames"]);
@@ -2606,6 +2776,7 @@ List cpp_volreg_estimate(
   int com_seed_count = 0;
   int blended_seed_count = 0;
   int parallel_frame_fits = 0;
+  int temporal_regularized_frames = 0;
   auto solve_sequence = [&](const Pose6& ref_seed, bool blend_current_pose_seed) {
     warm_start_passes += 1;
     bool parallel_frame_pass = parallel_frames && blend_current_pose_seed && nthreads > 1 && nt > 2;
@@ -2927,7 +3098,8 @@ List cpp_volreg_estimate(
                                                     false,
                                                     capture_trans_mm,
                                                     capture_rot_deg,
-                                                    0);
+                                                    0,
+                                                    dense_polish_interp);
           fit_polish.restart_used = fit_ic.restart_used;
           fit_polish.iters += fit_ic.iters;
           fit_polish.flags |= fit_ic.flags;
@@ -2956,7 +3128,8 @@ List cpp_volreg_estimate(
                                  first_level && capture_boost,
                                  capture_trans_mm,
                                  capture_rot_deg,
-                                 first_level ? capture_topk : 0);
+                                 first_level ? capture_topk : 0,
+                                 dense_interp);
     };
 
     auto fit_one = [&](int frame_t, const Pose6& init_pose) {
@@ -2979,6 +3152,62 @@ List cpp_volreg_estimate(
         cur = fit.pose;
       }
       return out;
+    };
+
+    auto final_objective = [&](int frame_t, const Pose6& pose) {
+      const LevelContext& level = levels.back();
+      if (level.use_ic) {
+        const std::vector<StencilPoint>* objective_stencil = &level.stencil;
+        int objective_nuisance_dim = level.nuisance_dim;
+        if (use_ic_polish && polish_iter > 0 && !level.polish_stencil.empty()) {
+          objective_stencil = &level.polish_stencil;
+          objective_nuisance_dim = level.polish_nuisance_dim;
+        }
+        if (use_nuisance_marginalization && objective_nuisance_dim > 0) {
+          return evaluate_cost_stencil_nuisance(data,
+                                                nx,
+                                                ny,
+                                                nz,
+                                                nxyz,
+                                                frame_t,
+                                                pixdim,
+                                                *objective_stencil,
+                                                pose,
+                                                huber_k,
+                                                use_overlap_taper,
+                                                objective_nuisance_dim,
+                                                nuisance_ridge,
+                                                fit_nthreads)
+              .cost;
+        }
+        return evaluate_cost_stencil(data,
+                                     nx,
+                                     ny,
+                                     nz,
+                                     nxyz,
+                                     frame_t,
+                                     pixdim,
+                                     *objective_stencil,
+                                     pose,
+                                     huber_k,
+                                     use_overlap_taper,
+                                     fit_nthreads)
+            .cost;
+      }
+      return evaluate_cost(data,
+                           template_vol,
+                           nx,
+                           ny,
+                           nz,
+                           nxyz,
+                           frame_t,
+                           pixdim,
+                           level.samples,
+                           pose,
+                           huber_k,
+                           use_overlap_taper,
+                           dense_interp)
+          .cost;
     };
 
     std::vector<Pose6> seed_poses = poses;
@@ -3066,6 +3295,43 @@ List cpp_volreg_estimate(
         store_fit(t, fit_one(t, forward_seed(t)));
       }
     }
+
+    if (use_temporal_regularization && nt > 2 && temporal_regularization_iter > 0 && temporal_regularization_alpha > 0.0) {
+      double mean_step = 0.0;
+      for (int t = 1; t < nt; ++t) {
+        mean_step += pose_step_norm(poses[t], poses[t - 1]);
+      }
+      mean_step /= static_cast<double>(nt - 1);
+      if (temporal_regularization_fd_max <= 0.0 || mean_step <= temporal_regularization_fd_max) {
+        double alpha = std::min(1.0, std::max(0.0, temporal_regularization_alpha));
+        for (int iter = 0; iter < temporal_regularization_iter; ++iter) {
+          std::vector<Pose6> cand = poses;
+          for (int t = 1; t < nt - 1; ++t) {
+            Pose6 local_mean = scale_pose(add_pose(poses[t - 1], poses[t + 1]), 0.5);
+            cand[t] = add_pose(scale_pose(poses[t], 1.0 - alpha), scale_pose(local_mean, alpha));
+          }
+          for (int t = 1; t < nt - 1; ++t) {
+            if (t == ref_t) {
+              continue;
+            }
+            double old_cost = final_objective(t, poses[t]);
+            double new_cost = final_objective(t, cand[t]);
+            if (R_finite(new_cost) && R_finite(old_cost) &&
+                new_cost <= old_cost * (1.0 + std::max(0.0, temporal_regularization_cost_tol))) {
+              FrameFit fit = FrameFit{cand[t],
+                                      cost_init[t],
+                                      new_cost,
+                                      overlap[t],
+                                      iters[t],
+                                      static_cast<bool>(restart_used[t]),
+                                      flags[t]};
+              store_fit(t, fit);
+              temporal_regularized_frames += 1;
+            }
+          }
+        }
+      }
+    }
   };
 
   solve_sequence(ref_init, false);
@@ -3108,7 +3374,8 @@ List cpp_volreg_estimate(
                           _["momentum_seeds"] = momentum_backward + momentum_forward,
                           _["center_of_mass_seeds"] = com_seed_count,
                           _["blended_current_pose_seeds"] = blended_seed_count,
-                          _["parallel_frame_fits"] = parallel_frame_fits),
+                          _["parallel_frame_fits"] = parallel_frame_fits,
+                          _["temporal_regularized_frames"] = temporal_regularized_frames),
                       _["pyramid"] = List::create(
                           _["downsample"] = wrap(downsample_levels),
                           _["max_iter"] = wrap(max_iter_levels),
