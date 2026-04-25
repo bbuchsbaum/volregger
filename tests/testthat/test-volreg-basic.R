@@ -229,14 +229,28 @@ test_that("apply_motion exposes clamp and zero boundary handling", {
 test_that("apply_motion zpad matches cropped symmetric zero padding", {
   set.seed(23)
   x <- array(rnorm(7 * 6 * 4), dim = c(7, 6, 4, 1))
+  zpad <- 4L
+  d <- dim(x)
+  xp <- array(0, dim = c(d[1] + 2L * zpad, d[2] + 2L * zpad, d[3] + 2L * zpad, d[4]))
+  xp[(zpad + 1L):(zpad + d[1]),
+     (zpad + 1L):(zpad + d[2]),
+     (zpad + 1L):(zpad + d[3]),
+     ] <- x
   motion <- matrix(0, nrow = 1, ncol = 6)
   motion[1, 1] <- 1.1
   motion[1, 2] <- -0.6
   motion[1, 6] <- 0.08
 
   y_zero <- apply_motion(x, motion, interp = "lanczos", pad = "zero")
-  y_zpad <- apply_motion(x, motion, interp = "lanczos", zpad = 4L)
+  y_zpad <- apply_motion(x, motion, interp = "lanczos", zpad = zpad)
+  y_padded <- apply_motion(xp, motion, interp = "lanczos", pad = "zero")
+  y_crop <- y_padded[(zpad + 1L):(zpad + d[1]),
+                     (zpad + 1L):(zpad + d[2]),
+                     (zpad + 1L):(zpad + d[3]),
+                     ,
+                     drop = FALSE]
 
+  expect_equal(y_zpad, y_crop, tolerance = 1e-10)
   expect_equal(y_zpad, y_zero, tolerance = 1e-10)
   expect_error(apply_motion(x, motion, zpad = -1L), "zpad must be")
 })

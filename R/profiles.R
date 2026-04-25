@@ -86,7 +86,7 @@ volreg_profile <- function(
     ),
     fast_fmri = list(
       engine = "rigid_robust",
-      components = c("capture_boost", "ic_stencil", "whiten", "fast_native", "edge_exclude", "valid_template_refresh"),
+      components = c("capture_boost", "ic_stencil", "whiten", "fast_native", "edge_exclude", "valid_template_refresh", "parallel_frames"),
       control = list(
         use_ic_stencil = TRUE,
         whiten_modes = TRUE,
@@ -96,7 +96,8 @@ volreg_profile <- function(
         capture_topk = 4L,
         max_iter = c(30L, 20L, 12L),
         edge_exclude_frac = 0.05,
-        template_refresh_valid_only = TRUE
+        template_refresh_valid_only = TRUE,
+        parallel_frames = TRUE
       )
     ),
     ic_stencil = list(
@@ -146,7 +147,7 @@ volreg_profile <- function(
     ),
     ic_nuisance_adaptive_tuned = list(
       engine = "rigid_robust",
-      components = c("capture_boost", "ic_stencil", "whiten", "nuisance", "adaptive_huber", "huber_0.15", "iter_12"),
+      components = c("capture_boost", "ic_stencil", "whiten", "nuisance", "adaptive_huber", "huber_0.15", "iter_12", "parallel_frames"),
       control = list(
         use_ic_stencil = TRUE,
         whiten_modes = TRUE,
@@ -157,7 +158,8 @@ volreg_profile <- function(
         adaptive_huber = TRUE,
         template_refresh_valid_only = TRUE,
         huber_k = 0.15,
-        max_iter = 12L
+        max_iter = 12L,
+        parallel_frames = TRUE
       )
     ),
     ic_nuisance_adaptive_guarded = list(
@@ -177,7 +179,7 @@ volreg_profile <- function(
     ),
     ic_nuisance_polish = list(
       engine = "rigid_robust",
-      components = c("capture_boost", "ic_stencil", "whiten", "nuisance", "adaptive_huber", "huber_0.15", "iter_12", "ic_polish"),
+      components = c("capture_boost", "ic_stencil", "whiten", "nuisance", "adaptive_huber", "huber_0.15", "iter_12", "parallel_frames", "ic_polish"),
       control = list(
         use_ic_stencil = TRUE,
         whiten_modes = TRUE,
@@ -189,6 +191,7 @@ volreg_profile <- function(
         template_refresh_valid_only = TRUE,
         huber_k = 0.15,
         max_iter = 12L,
+        parallel_frames = TRUE,
         use_ic_polish = TRUE,
         polish_iter = 3L,
         polish_n_samples = 2000L
