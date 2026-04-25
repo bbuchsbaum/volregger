@@ -67,6 +67,53 @@ test_that("fast_native profile targets the native speed frontier", {
   expect_equal(prof$control$capture_topk, 4L)
 })
 
+test_that("fast_native_pyramid profile enables bounded coarse-to-fine fitting", {
+  prof <- volreg_profile("fast_native_pyramid")
+
+  expect_s3_class(prof, "volreg_profile")
+  expect_true("pyramid" %in% prof$components)
+  expect_true(isTRUE(prof$control$use_pyramid))
+  expect_equal(prof$control$downsample, c(4L, 2L, 1L))
+  expect_equal(prof$control$max_iter, c(4L, 3L, 4L))
+  expect_equal(prof$control$n_samples, c(1000L, 2000L, 8000L))
+})
+
+test_that("fast_native_parallel profile enables opt-in frame parallelism", {
+  prof <- volreg_profile("fast_native_parallel")
+
+  expect_s3_class(prof, "volreg_profile")
+  expect_true("parallel_frames" %in% prof$components)
+  expect_true(isTRUE(prof$control$parallel_frames))
+  expect_true(isTRUE(prof$control$use_ic_stencil))
+  expect_true(isTRUE(prof$control$whiten_modes))
+})
+
+test_that("bare high-level APIs use fast_fmri while dense baseline stays opt-in", {
+  set.seed(201)
+  x0 <- array(rnorm(6 * 6 * 4), dim = c(6, 6, 4))
+  x <- array(rep(as.numeric(x0), 4), dim = c(6, 6, 4, 4))
+
+  fit_default <- volreg(x, resample = FALSE, qc = FALSE)
+  expect_equal(fit_default$control$profile, "fast_fmri")
+  expect_true(isTRUE(fit_default$control$use_ic_stencil))
+  expect_true(isTRUE(fit_default$control$whiten_modes))
+  expect_equal(fit_default$control$edge_exclude_frac, 0.05)
+  expect_true(isTRUE(fit_default$control$template_refresh_valid_only))
+
+  ctl <- utils::modifyList(volreg_control(), list(max_iter = 1L, n_samples = 500L))
+  fit_manual <- volreg(x, resample = FALSE, qc = FALSE, control = ctl)
+  expect_null(fit_manual$control$profile)
+  expect_true(isTRUE(fit_manual$control$use_ic_stencil))
+
+  fit_dense <- volreg(x, resample = FALSE, qc = FALSE, profile = "dense_baseline")
+  expect_equal(fit_dense$control$profile, "dense_baseline")
+  expect_false(isTRUE(fit_dense$control$use_ic_stencil))
+  expect_false(isTRUE(fit_dense$control$whiten_modes))
+
+  est_default <- estimate_motion(x)
+  expect_equal(est_default$warm_start$passes, 2L)
+})
+
 test_that("fast_fmri profile adds fMRI-specific edge and template safeguards", {
   prof <- volreg_profile("fast_fmri")
 

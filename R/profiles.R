@@ -10,6 +10,8 @@ volreg_profile <- function(
     name = c(
       "dense_baseline",
       "fast_native",
+      "fast_native_parallel",
+      "fast_native_pyramid",
       "fast_fmri",
       "ic_stencil",
       "ic_whiten",
@@ -34,7 +36,9 @@ volreg_profile <- function(
         use_ic_stencil = FALSE,
         whiten_modes = FALSE,
         use_nuisance_marginalization = FALSE,
-        nuisance_include_template = FALSE
+        nuisance_include_template = FALSE,
+        edge_exclude_frac = 0,
+        template_refresh_valid_only = FALSE
       )
     ),
     fast_native = list(
@@ -48,6 +52,36 @@ volreg_profile <- function(
         stencil_n = 1000L,
         capture_topk = 4L,
         max_iter = c(30L, 20L, 12L)
+      )
+    ),
+    fast_native_parallel = list(
+      engine = "rigid_robust",
+      components = c("capture_boost", "ic_stencil", "whiten", "fast_native", "parallel_frames"),
+      control = list(
+        use_ic_stencil = TRUE,
+        whiten_modes = TRUE,
+        use_nuisance_marginalization = FALSE,
+        nuisance_include_template = FALSE,
+        stencil_n = 1000L,
+        capture_topk = 4L,
+        max_iter = c(30L, 20L, 12L),
+        parallel_frames = TRUE
+      )
+    ),
+    fast_native_pyramid = list(
+      engine = "rigid_robust",
+      components = c("capture_boost", "ic_stencil", "whiten", "fast_native", "pyramid"),
+      control = list(
+        use_ic_stencil = TRUE,
+        whiten_modes = TRUE,
+        use_nuisance_marginalization = FALSE,
+        nuisance_include_template = FALSE,
+        stencil_n = 1000L,
+        capture_topk = 4L,
+        use_pyramid = TRUE,
+        downsample = c(4L, 2L, 1L),
+        max_iter = c(4L, 3L, 4L),
+        n_samples = c(1000L, 2000L, 8000L)
       )
     ),
     fast_fmri = list(
@@ -200,4 +234,17 @@ print.volreg_profile <- function(x, ...) {
   cat("  engine:", x$engine, "\n")
   cat("  components:", paste(x$components, collapse = ", "), "\n")
   invisible(x)
+}
+
+.apply_volreg_profile <- function(control, profile) {
+  if (is.null(profile) || identical(profile, FALSE) || identical(profile, "none")) {
+    return(list(control = control, engine = NULL, name = NULL))
+  }
+  prof <- if (inherits(profile, "volreg_profile")) {
+    profile
+  } else {
+    volreg_profile(as.character(profile), control = control)
+  }
+  prof$control$profile <- prof$name
+  list(control = prof$control, engine = prof$engine, name = prof$name)
 }

@@ -8,6 +8,8 @@
 #' @param slice_times Optional slice timing offsets.
 #' @param mb_groups Optional multiband group IDs.
 #' @param control Control list.
+#' @param profile Optional named estimator profile. Bare `estimate_motion()`
+#'   uses `"fast_fmri"` when `control` is not supplied.
 #' @param verbose Verbose logging.
 #' @return A list containing estimated motion and fit diagnostics.
 #' @export
@@ -20,9 +22,20 @@ estimate_motion <- function(
     slice_times = NULL,
     mb_groups = NULL,
     control = volreg_control(),
+    profile = NULL,
     verbose = FALSE) {
+  control_missing <- missing(control)
+  engine_missing <- missing(engine)
   ref <- match.arg(ref)
-  engine <- match.arg(engine)
+  if (is.null(profile) && control_missing) {
+    profile <- "fast_fmri"
+  }
+  prof <- .apply_volreg_profile(control, profile)
+  control <- prof$control
+  if (!is.null(prof$engine) && engine_missing) {
+    engine <- prof$engine
+  }
+  engine <- match.arg(engine, c("rigid_robust", "rigid_spline"))
 
   inp <- .as_volreg_input(
     x = x,

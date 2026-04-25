@@ -14,6 +14,9 @@
 #'   resampling and cropping back to the original grid.
 #' @param qc If TRUE, compute QC metrics.
 #' @param control Control list.
+#' @param profile Optional named estimator profile. Bare `volreg()` uses
+#'   `"fast_fmri"` when `control` is not supplied; pass `profile = NULL`
+#'   with an explicit `control` list for fully manual settings.
 #' @param verbose Verbose logging.
 #' @return A `volregger_fit` object.
 #' @export
@@ -31,15 +34,26 @@ volreg <- function(
     zpad_final = 0L,
     qc = TRUE,
     control = volreg_control(),
+    profile = NULL,
     verbose = FALSE) {
+  control_missing <- missing(control)
+  engine_missing <- missing(engine)
   ref <- match.arg(ref)
-  engine <- match.arg(engine)
   interp_final <- match.arg(interp_final)
   pad_final <- match.arg(pad_final)
   zpad_final <- as.integer(zpad_final)
   if (length(zpad_final) != 1L || is.na(zpad_final) || zpad_final < 0L) {
     stop("zpad_final must be a non-negative integer", call. = FALSE)
   }
+  if (is.null(profile) && control_missing) {
+    profile <- "fast_fmri"
+  }
+  prof <- .apply_volreg_profile(control, profile)
+  control <- prof$control
+  if (!is.null(prof$engine) && engine_missing) {
+    engine <- prof$engine
+  }
+  engine <- match.arg(engine, c("rigid_robust", "rigid_spline"))
 
   inp <- .as_volreg_input(
     x = x,

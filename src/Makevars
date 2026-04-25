@@ -1,0 +1,8 @@
+VOLREGGER_OPTFLAGS = -O3 -fno-math-errno
+
+ifeq ($(VOLREGGER_NATIVE),true)
+VOLREGGER_OPTFLAGS += -march=native
+endif
+
+%.o: %.cpp
+	$(CXX) $(ALL_CPPFLAGS) $(ALL_CXXFLAGS) $(VOLREGGER_OPTFLAGS) -c $< -o $@

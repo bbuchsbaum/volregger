@@ -39,6 +39,37 @@ test_that("edge exclusion removes fitting voxels near the FOV boundary", {
   expect_true(est$mask[4, 4, 3])
 })
 
+test_that("estimate_motion reports momentum warm-start usage", {
+  set.seed(23)
+  x <- array(rnorm(7 * 7 * 5 * 6), dim = c(7, 7, 5, 6))
+  ctl <- utils::modifyList(
+    volreg_control(),
+    list(max_iter = 1L, n_samples = 1000L, robust_template = FALSE)
+  )
+
+  est <- estimate_motion(x, ref = "index", ref_index = 3L, control = ctl)
+
+  expect_equal(est$warm_start$passes, 1L)
+  expect_equal(est$warm_start$momentum_backward, 1L)
+  expect_equal(est$warm_start$momentum_forward, 2L)
+  expect_equal(est$warm_start$momentum_seeds, 3L)
+  expect_equal(est$warm_start$center_of_mass_seeds, 5L)
+})
+
+test_that("estimate_motion reports opt-in parallel refresh-frame fits", {
+  set.seed(24)
+  x <- array(rnorm(7 * 7 * 5 * 6), dim = c(7, 7, 5, 6))
+  ctl <- utils::modifyList(
+    volreg_control(),
+    list(max_iter = 1L, n_samples = 1000L, robust_template = TRUE, parallel_frames = TRUE, nthreads = 2L)
+  )
+
+  est <- estimate_motion(x, ref = "index", ref_index = 3L, control = ctl)
+
+  expect_equal(est$warm_start$passes, 2L)
+  expect_equal(est$warm_start$parallel_frame_fits, 5L)
+})
+
 test_that("estimate_motion detects known translation perturbation", {
   x0 <- array(0, dim = c(9, 9, 5))
   x0[5, 5, 3] <- 5

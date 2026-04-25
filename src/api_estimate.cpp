@@ -624,6 +624,37 @@ std::vector<int> make_sample_points(const LogicalVector& mask, int nxyz, int tar
   return out;
 }
 
+LogicalVector make_downsampled_mask(const LogicalVector& mask,
+                                    int nx,
+                                    int ny,
+                                    int nz,
+                                    int downsample) {
+  if (downsample <= 1) {
+    return clone(mask);
+  }
+  LogicalVector out(mask.size(), false);
+  int kept = 0;
+  for (int k = 0; k < nz; ++k) {
+    for (int j = 0; j < ny; ++j) {
+      for (int i = 0; i < nx; ++i) {
+        int v = i + nx * (j + ny * k);
+        bool keep = mask[v] == TRUE &&
+                    (i % downsample == 0) &&
+                    (j % downsample == 0) &&
+                    (k % downsample == 0);
+        out[v] = keep;
+        if (keep) {
+          ++kept;
+        }
+      }
+    }
+  }
+  if (kept == 0) {
+    return clone(mask);
+  }
+  return out;
+}
+
 struct StencilPoint {
   int v;
   int i;
@@ -2314,6 +2345,59 @@ int get_int_ctrl(const List& control, const std::string& name, int default_value
   return default_value;
 }
 
+std::vector<int> get_int_vector_ctrl(const List& control,
+                                     const std::string& name,
+                                     const std::vector<int>& default_values) {
+  if (!control.containsElementNamed(name.c_str())) {
+    return default_values;
+  }
+  SEXP v = control[name];
+  std::vector<int> out;
+  if (Rf_isInteger(v)) {
+    IntegerVector iv(v);
+    out.reserve(iv.size());
+    for (int i = 0; i < iv.size(); ++i) {
+      out.push_back(iv[i]);
+    }
+  } else if (Rf_isReal(v)) {
+    NumericVector nv(v);
+    out.reserve(nv.size());
+    for (int i = 0; i < nv.size(); ++i) {
+      out.push_back(static_cast<int>(std::round(nv[i])));
+    }
+  }
+  if (out.empty()) {
+    return default_values;
+  }
+  return out;
+}
+
+int level_value(const std::vector<int>& values, size_t level, int fallback) {
+  if (values.empty()) {
+    return fallback;
+  }
+  size_t idx = std::min(level, values.size() - 1);
+  return values[idx];
+}
+
+std::vector<int> sanitize_downsample_levels(std::vector<int> levels) {
+  std::vector<int> out;
+  out.reserve(levels.size() + 1);
+  for (size_t i = 0; i < levels.size(); ++i) {
+    int ds = std::max(1, levels[i]);
+    if (out.empty() || out.back() != ds) {
+      out.push_back(ds);
+    }
+  }
+  if (out.empty()) {
+    out.push_back(1);
+  }
+  if (out.back() != 1) {
+    out.push_back(1);
+  }
+  return out;
+}
+
 double get_dbl_ctrl(const List& control, const std::string& name, double default_value) {
   if (!control.containsElementNamed(name.c_str())) {
     return default_value;
@@ -2363,8 +2447,25 @@ List cpp_volreg_estimate(
     trim_frac = as<double>(control["template_trim"]);
   }
 
-  int max_iter = get_int_ctrl(control, "max_iter", 20);
-  int n_samples = get_int_ctrl(control, "n_samples", 20000);
+  std::vector<int> downsample_levels =
+      sanitize_downsample_levels(get_int_vector_ctrl(control, "downsample", std::vector<int>{1}));
+  bool use_pyramid = false;
+  if (control.containsElementNamed("use_pyramid")) {
+    use_pyramid = as<bool>(control["use_pyramid"]);
+  }
+  if (!use_pyramid) {
+    downsample_levels = std::vector<int>{1};
+  }
+  std::vector<int> max_iter_levels =
+      get_int_vector_ctrl(control, "max_iter", std::vector<int>{20});
+  std::vector<int> n_samples_levels =
+      get_int_vector_ctrl(control, "n_samples", std::vector<int>{20000});
+  int max_iter = std::max(0, level_value(max_iter_levels, max_iter_levels.size() - 1, 20));
+  int n_samples = std::max(0, level_value(n_samples_levels, n_samples_levels.size() - 1, 20000));
+  if (!use_pyramid) {
+    max_iter_levels = std::vector<int>{max_iter};
+    n_samples_levels = std::vector<int>{n_samples};
+  }
   int n_restarts = get_int_ctrl(control, "n_restarts", 0);
   double huber_k = get_dbl_ctrl(control, "huber_k", 1.5);
   bool adaptive_huber = false;
@@ -2423,6 +2524,10 @@ List cpp_volreg_estimate(
   }
   int polish_iter = get_int_ctrl(control, "polish_iter", 5);
   int polish_n_samples = get_int_ctrl(control, "polish_n_samples", 0);
+  bool parallel_frames = false;
+  if (control.containsElementNamed("parallel_frames")) {
+    parallel_frames = as<bool>(control["parallel_frames"]);
+  }
   double edge_exclude_frac = get_dbl_ctrl(control, "edge_exclude_frac", 0.0);
   int edge_exclude_vox = get_int_ctrl(control, "edge_exclude_vox", 0);
   int nthreads = std::max(1, get_int_ctrl(control, "nthreads", 1));
@@ -2491,60 +2596,104 @@ List cpp_volreg_estimate(
                              0.0,
                              0.0,
                              0.0);
+  int warm_start_passes = 0;
+  int momentum_backward = 0;
+  int momentum_forward = 0;
+  int com_seed_count = 0;
+  int blended_seed_count = 0;
+  int parallel_frame_fits = 0;
   auto solve_sequence = [&](const Pose6& ref_seed, bool blend_current_pose_seed) {
-    std::vector<StencilPoint> stencil;
-    bool use_ic_local = use_ic_stencil;
-    bool use_whiten_local = false;
-    int nuisance_dim_local = 0;
-    WhitenMetric wm;
-    wm.ok = false;
-    set_identity6(wm.L);
-    set_identity6(wm.Linv);
-    set_identity6(wm.LinvT);
-    if (use_ic_local) {
-      stencil = build_ic_stencil(template_vol,
-                                 data,
-                                 nx,
-                                 ny,
-                                 nz,
-                                 nt,
-                                 nxyz,
-                                 pixdim,
-                                 fit_mask,
-                                 stencil_n,
-                                 stencil_bx,
-                                 stencil_by,
-                                 stencil_bz,
-                                 stencil_gamma);
-      if (stencil.empty()) {
-        use_ic_local = false;
-      } else {
-        if (whiten_modes) {
-          wm = build_whiten_metric(stencil, whiten_reg);
-          if (wm.ok) {
-            apply_whiten_metric_to_stencil(&stencil, wm);
-            use_whiten_local = true;
-          } else {
-            copy_raw_jacobian_to_whitened(&stencil);
-          }
-        } else {
-          copy_raw_jacobian_to_whitened(&stencil);
-        }
-        if (use_nuisance_marginalization) {
-          nuisance_dim_local = prepare_nuisance_basis(&stencil,
-                                                      nx,
-                                                      ny,
-                                                      nz,
-                                                      nuisance_include_template,
-                                                      nuisance_orthogonalize,
-                                                      use_whiten_local,
-                                                      nuisance_orth_reg);
+    warm_start_passes += 1;
+    bool parallel_frame_pass = parallel_frames && blend_current_pose_seed && nthreads > 1 && nt > 2;
+    int fit_nthreads = parallel_frame_pass ? 1 : nthreads;
+    struct LevelContext {
+      int downsample;
+      int max_iter;
+      std::vector<int> samples;
+      std::vector<int> polish_samples;
+      std::vector<StencilPoint> stencil;
+      bool use_ic;
+      bool use_whiten;
+      int nuisance_dim;
+      WhitenMetric wm;
+    };
+
+    std::vector<LevelContext> levels;
+    levels.reserve(downsample_levels.size());
+    for (size_t li = 0; li < downsample_levels.size(); ++li) {
+      int ds = downsample_levels[li];
+      LogicalVector level_mask = make_downsampled_mask(fit_mask, nx, ny, nz, ds);
+      int level_n_samples = std::max(0, level_value(n_samples_levels, li, n_samples));
+      int level_max_iter = std::max(0, level_value(max_iter_levels, li, max_iter));
+
+      LevelContext level;
+      level.downsample = ds;
+      level.max_iter = level_max_iter;
+      level.samples = make_sample_points(level_mask, nxyz, level_n_samples);
+      if (level.samples.empty()) {
+        level.samples = samples;
+      }
+      level.use_ic = false;
+      level.use_whiten = false;
+      level.nuisance_dim = 0;
+      level.wm.ok = false;
+      set_identity6(level.wm.L);
+      set_identity6(level.wm.Linv);
+      set_identity6(level.wm.LinvT);
+
+      if (use_dense_polish && polish_iter > 0 && li + 1 == downsample_levels.size()) {
+        int polish_target = polish_n_samples > 0 ? polish_n_samples : level_n_samples;
+        level.polish_samples = make_sample_points(level_mask, nxyz, polish_target);
+        if (level.polish_samples.empty()) {
+          level.polish_samples = polish_samples;
         }
       }
+
+      if (use_ic_stencil) {
+        level.stencil = build_ic_stencil(template_vol,
+                                         data,
+                                         nx,
+                                         ny,
+                                         nz,
+                                         nt,
+                                         nxyz,
+                                         pixdim,
+                                         level_mask,
+                                         stencil_n,
+                                         stencil_bx,
+                                         stencil_by,
+                                         stencil_bz,
+                                         stencil_gamma);
+        if (!level.stencil.empty()) {
+          level.use_ic = true;
+          if (whiten_modes) {
+            level.wm = build_whiten_metric(level.stencil, whiten_reg);
+            if (level.wm.ok) {
+              apply_whiten_metric_to_stencil(&level.stencil, level.wm);
+              level.use_whiten = true;
+            } else {
+              copy_raw_jacobian_to_whitened(&level.stencil);
+            }
+          } else {
+            copy_raw_jacobian_to_whitened(&level.stencil);
+          }
+          if (use_nuisance_marginalization) {
+            level.nuisance_dim = prepare_nuisance_basis(&level.stencil,
+                                                        nx,
+                                                        ny,
+                                                        nz,
+                                                        nuisance_include_template,
+                                                        nuisance_orthogonalize,
+                                                        level.use_whiten,
+                                                        nuisance_orth_reg);
+          }
+        }
+      }
+      levels.push_back(level);
     }
 
-    auto fit_one = [&](int frame_t, const Pose6& init_pose) {
-      if (use_ic_local) {
+    auto fit_level = [&](const LevelContext& level, int frame_t, const Pose6& init_pose, bool first_level, bool final_level) {
+      if (level.use_ic) {
         auto run_ic = [&](bool use_adaptive) {
           return optimize_frame_pose_ic(data,
                                         nx,
@@ -2553,29 +2702,29 @@ List cpp_volreg_estimate(
                                         nxyz,
                                         frame_t,
                                         pixdim,
-                                        stencil,
+                                        level.stencil,
                                         init_pose,
-                                        max_iter,
+                                        level.max_iter,
                                         lambda0,
                                         tol_step,
                                         tol_cost,
                                         huber_k,
                                         use_adaptive,
-                                        n_restarts,
+                                        first_level ? n_restarts : 0,
                                         use_overlap_taper,
-                                        capture_boost,
+                                        first_level && capture_boost,
                                         capture_trans_mm,
                                         capture_rot_deg,
-                                        capture_topk,
-                                        use_whiten_local,
-                                        use_whiten_local ? wm.LinvT : nullptr,
+                                        first_level ? capture_topk : 0,
+                                        level.use_whiten,
+                                        level.use_whiten ? level.wm.LinvT : nullptr,
                                         use_nuisance_marginalization,
-                                        nuisance_dim_local,
+                                        level.nuisance_dim,
                                         nuisance_ridge,
-                                        nthreads);
+                                        fit_nthreads);
         };
         auto fixed_objective = [&](const Pose6& pose) {
-          if (use_nuisance_marginalization && nuisance_dim_local > 0) {
+          if (use_nuisance_marginalization && level.nuisance_dim > 0) {
             return evaluate_cost_stencil_nuisance(data,
                                                   nx,
                                                   ny,
@@ -2583,13 +2732,13 @@ List cpp_volreg_estimate(
                                                   nxyz,
                                                   frame_t,
                                                   pixdim,
-                                                  stencil,
+                                                  level.stencil,
                                                   pose,
                                                   huber_k,
                                                   use_overlap_taper,
-                                                  nuisance_dim_local,
+                                                  level.nuisance_dim,
                                                   nuisance_ridge,
-                                                  nthreads)
+                                                  fit_nthreads)
                 .cost;
           }
           return evaluate_cost_stencil(data,
@@ -2599,11 +2748,11 @@ List cpp_volreg_estimate(
                                        nxyz,
                                        frame_t,
                                        pixdim,
-                                       stencil,
+                                       level.stencil,
                                        pose,
                                        huber_k,
                                        use_overlap_taper,
-                                       nthreads)
+                                       fit_nthreads)
               .cost;
         };
 
@@ -2618,7 +2767,7 @@ List cpp_volreg_estimate(
             fit_ic.cost_final = c_adaptive;
           }
         }
-        if (use_dense_polish && polish_iter > 0 && !polish_samples.empty()) {
+        if (final_level && use_dense_polish && polish_iter > 0 && !level.polish_samples.empty()) {
           FrameFit fit_polish = optimize_frame_pose(data,
                                                     template_vol,
                                                     nx,
@@ -2627,7 +2776,7 @@ List cpp_volreg_estimate(
                                                     nxyz,
                                                     frame_t,
                                                     pixdim,
-                                                    polish_samples,
+                                                    level.polish_samples,
                                                     fit_ic.pose,
                                                     polish_iter,
                                                     lambda0,
@@ -2656,29 +2805,52 @@ List cpp_volreg_estimate(
                                  nxyz,
                                  frame_t,
                                  pixdim,
-                                 samples,
+                                 level.samples,
                                  init_pose,
-                                 max_iter,
+                                 level.max_iter,
                                  lambda0,
                                  tol_step,
                                  tol_cost,
                                  huber_k,
                                  adaptive_huber,
-                                 n_restarts,
+                                 first_level ? n_restarts : 0,
                                  use_overlap_taper,
-                                 capture_boost,
+                                 first_level && capture_boost,
                                  capture_trans_mm,
                                  capture_rot_deg,
-                                 capture_topk);
+                                 first_level ? capture_topk : 0);
     };
 
+    auto fit_one = [&](int frame_t, const Pose6& init_pose) {
+      Pose6 cur = init_pose;
+      FrameFit out = FrameFit{init_pose, NA_REAL, NA_REAL, NA_REAL, 0, false, 0};
+      bool have_fit = false;
+      for (size_t li = 0; li < levels.size(); ++li) {
+        FrameFit fit = fit_level(levels[li], frame_t, cur, li == 0, li + 1 == levels.size());
+        if (!have_fit) {
+          out = fit;
+          have_fit = true;
+        } else {
+          out.pose = fit.pose;
+          out.cost_final = fit.cost_final;
+          out.overlap = fit.overlap;
+          out.iters += fit.iters;
+          out.restart_used = out.restart_used || fit.restart_used;
+          out.flags |= fit.flags;
+        }
+        cur = fit.pose;
+      }
+      return out;
+    };
+
+    std::vector<Pose6> seed_poses = poses;
     store_fit(ref_t, fit_one(ref_t, ref_seed));
 
-    // Backward from reference
-    for (int t = ref_t - 1; t >= 0; --t) {
-      Pose6 init = poses[t + 1];
+    auto backward_seed = [&](int t) {
+      Pose6 init = seed_poses[t + 1];
       if (t + 2 <= ref_t) {
-        init = add_pose(poses[t + 1], sub_pose(poses[t + 1], poses[t + 2]));
+        init = add_pose(seed_poses[t + 1], sub_pose(seed_poses[t + 1], seed_poses[t + 2]));
+        momentum_backward += 1;
       }
       Vec3 com_t = center_of_mass_frame(data, nx, ny, nz, nxyz, t, pixdim, fit_mask);
       Pose6 com_seed = make_pose(com_ref.x - com_t.x,
@@ -2687,19 +2859,20 @@ List cpp_volreg_estimate(
                                  0.0,
                                  0.0,
                                  0.0);
+      com_seed_count += 1;
       init = scale_pose(add_pose(init, com_seed), 0.5);
       if (blend_current_pose_seed) {
-        init = scale_pose(add_pose(init, poses[t]), 0.5);
+        init = scale_pose(add_pose(init, seed_poses[t]), 0.5);
+        blended_seed_count += 1;
       }
+      return init;
+    };
 
-      store_fit(t, fit_one(t, init));
-    }
-
-    // Forward from reference
-    for (int t = ref_t + 1; t < nt; ++t) {
-      Pose6 init = poses[t - 1];
+    auto forward_seed = [&](int t) {
+      Pose6 init = seed_poses[t - 1];
       if (t - 2 >= ref_t) {
-        init = add_pose(poses[t - 1], sub_pose(poses[t - 1], poses[t - 2]));
+        init = add_pose(seed_poses[t - 1], sub_pose(seed_poses[t - 1], seed_poses[t - 2]));
+        momentum_forward += 1;
       }
       Vec3 com_t = center_of_mass_frame(data, nx, ny, nz, nxyz, t, pixdim, fit_mask);
       Pose6 com_seed = make_pose(com_ref.x - com_t.x,
@@ -2708,12 +2881,52 @@ List cpp_volreg_estimate(
                                  0.0,
                                  0.0,
                                  0.0);
+      com_seed_count += 1;
       init = scale_pose(add_pose(init, com_seed), 0.5);
       if (blend_current_pose_seed) {
-        init = scale_pose(add_pose(init, poses[t]), 0.5);
+        init = scale_pose(add_pose(init, seed_poses[t]), 0.5);
+        blended_seed_count += 1;
+      }
+      return init;
+    };
+
+    if (parallel_frame_pass) {
+      std::vector<Pose6> seeds(nt, make_pose());
+      std::vector<unsigned char> do_fit(nt, 0);
+      for (int t = ref_t - 1; t >= 0; --t) {
+        seeds[t] = backward_seed(t);
+        do_fit[t] = 1;
+      }
+      for (int t = ref_t + 1; t < nt; ++t) {
+        seeds[t] = forward_seed(t);
+        do_fit[t] = 1;
       }
 
-      store_fit(t, fit_one(t, init));
+      std::vector<FrameFit> fits(nt, FrameFit{make_pose(), NA_REAL, NA_REAL, NA_REAL, 0, false, 0});
+      parallel_for_range(static_cast<size_t>(nt), nthreads, [&](size_t begin, size_t end) {
+        for (size_t tt = begin; tt < end; ++tt) {
+          int t = static_cast<int>(tt);
+          if (do_fit[t]) {
+            fits[t] = fit_one(t, seeds[t]);
+          }
+        }
+      });
+      for (int t = 0; t < nt; ++t) {
+        if (do_fit[t]) {
+          store_fit(t, fits[t]);
+          parallel_frame_fits += 1;
+        }
+      }
+    } else {
+      // Backward from reference
+      for (int t = ref_t - 1; t >= 0; --t) {
+        store_fit(t, fit_one(t, backward_seed(t)));
+      }
+
+      // Forward from reference
+      for (int t = ref_t + 1; t < nt; ++t) {
+        store_fit(t, fit_one(t, forward_seed(t)));
+      }
     }
   };
 
@@ -2749,5 +2962,17 @@ List cpp_volreg_estimate(
                       _["iters"] = iters,
                       _["restart_used"] = restart_used,
                       _["overlap"] = overlap,
-                      _["flags"] = flags);
+                      _["flags"] = flags,
+                      _["warm_start"] = List::create(
+                          _["passes"] = warm_start_passes,
+                          _["momentum_backward"] = momentum_backward,
+                          _["momentum_forward"] = momentum_forward,
+                          _["momentum_seeds"] = momentum_backward + momentum_forward,
+                          _["center_of_mass_seeds"] = com_seed_count,
+                          _["blended_current_pose_seeds"] = blended_seed_count,
+                          _["parallel_frame_fits"] = parallel_frame_fits),
+                      _["pyramid"] = List::create(
+                          _["downsample"] = wrap(downsample_levels),
+                          _["max_iter"] = wrap(max_iter_levels),
+                          _["n_samples"] = wrap(n_samples_levels)));
 }
