@@ -23,6 +23,7 @@ volreg_profile <- function(
       "ic_nuisance_kernel_polish",
       "ic_nuisance_temporal_guard",
       "ic_nuisance_se3",
+      "ic_nuisance_temporal_prior",
       "ic_nuisance_full",
       "slice_spline"
     ),
@@ -260,6 +261,26 @@ volreg_profile <- function(
         parallel_frames = TRUE,
         use_se3_updates = TRUE,
         se3_update_order = "left"
+      )
+    ),
+    ic_nuisance_temporal_prior = list(
+      engine = "rigid_robust",
+      components = c("capture_boost", "ic_stencil", "whiten", "nuisance", "adaptive_huber", "huber_0.15", "iter_12", "parallel_frames", "temporal_normal_prior"),
+      control = list(
+        use_ic_stencil = TRUE,
+        whiten_modes = TRUE,
+        use_nuisance_marginalization = TRUE,
+        nuisance_include_template = FALSE,
+        nuisance_orthogonalize = TRUE,
+        nuisance_ridge = 1e-4,
+        adaptive_huber = TRUE,
+        template_refresh_valid_only = TRUE,
+        huber_k = 0.15,
+        max_iter = 12L,
+        parallel_frames = TRUE,
+        use_temporal_normal_prior = TRUE,
+        temporal_normal_prior_weight = 0.02,
+        temporal_normal_prior_rot_radius = 50
       )
     ),
     ic_nuisance_full = list(

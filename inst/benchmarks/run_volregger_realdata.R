@@ -15,6 +15,8 @@ defaults <- list(
   huber_k = NULL,
   max_iter = NULL,
   edge_exclude_frac = NULL,
+  temporal_prior_weight = NULL,
+  temporal_prior_rot_radius = NULL,
   nthreads = "4"
 )
 opts <- parse_benchmark_args(
@@ -54,6 +56,13 @@ if (!is.null(opts$max_iter)) {
 }
 if (!is.null(opts$edge_exclude_frac)) {
   profile_overrides$edge_exclude_frac <- as.numeric(opts$edge_exclude_frac)
+}
+if (!is.null(opts$temporal_prior_weight)) {
+  profile_overrides$use_temporal_normal_prior <- TRUE
+  profile_overrides$temporal_normal_prior_weight <- as.numeric(opts$temporal_prior_weight)
+}
+if (!is.null(opts$temporal_prior_rot_radius)) {
+  profile_overrides$temporal_normal_prior_rot_radius <- as.numeric(opts$temporal_prior_rot_radius)
 }
 profile <- volreg_profile(
   opts$profile,
@@ -181,6 +190,8 @@ write.csv(
     huber_k = benchmark_scalar_last(profile$control$huber_k, NA_real_),
     max_iter = benchmark_scalar_last(profile$control$max_iter, NA_integer_),
     edge_exclude_frac = benchmark_scalar_last(profile$control$edge_exclude_frac, 0),
+    temporal_normal_prior_weight = benchmark_scalar_last(profile$control$temporal_normal_prior_weight, 0),
+    temporal_normal_prior_rot_radius = benchmark_scalar_last(profile$control$temporal_normal_prior_rot_radius, NA_real_),
     nthreads = nthreads,
     components = paste(profile$components, collapse = "+"),
     with_report = isTRUE(opts$with_report),

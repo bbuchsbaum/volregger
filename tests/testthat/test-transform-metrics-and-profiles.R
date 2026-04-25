@@ -180,6 +180,17 @@ test_that("SE3 profile enables opt-in composed optimizer updates", {
   expect_equal(prof$control$huber_k, 0.15)
 })
 
+test_that("temporal-prior profile enables optimizer-level normal-equation prior", {
+  prof <- volreg_profile("ic_nuisance_temporal_prior")
+
+  expect_s3_class(prof, "volreg_profile")
+  expect_true("temporal_normal_prior" %in% prof$components)
+  expect_true(isTRUE(prof$control$use_temporal_normal_prior))
+  expect_equal(prof$control$temporal_normal_prior_weight, 0.02)
+  expect_equal(prof$control$temporal_normal_prior_rot_radius, 50)
+  expect_true(isTRUE(prof$control$parallel_frames))
+})
+
 test_that("adaptive-Huber profile keeps IC setup and scales robust threshold", {
   prof <- volreg_profile("ic_nuisance_adaptive")
 

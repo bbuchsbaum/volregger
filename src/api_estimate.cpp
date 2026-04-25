@@ -201,6 +201,78 @@ Pose6 optimizer_update_pose(const Pose6& cur,
   return add_pose(cur, scale_pose(delta, alpha));
 }
 
+void add_pose_prior_to_system(double* H,
+                              double* g,
+                              const Pose6& cur,
+                              const Pose6& prior,
+                              double weight,
+                              double rot_radius,
+                              bool use_whiten_modes,
+                              const double* LinvT) {
+  if (weight <= 0.0 || !R_finite(weight)) {
+    return;
+  }
+  double d[6] = {
+      cur.tx - prior.tx,
+      cur.ty - prior.ty,
+      cur.tz - prior.tz,
+      wrap_pi(cur.rx - prior.rx) * rot_radius,
+      wrap_pi(cur.ry - prior.ry) * rot_radius,
+      wrap_pi(cur.rz - prior.rz) * rot_radius};
+  double S[6] = {1.0, 1.0, 1.0, rot_radius, rot_radius, rot_radius};
+  double J[36] = {0};
+  if (use_whiten_modes && LinvT != nullptr) {
+    for (int q = 0; q < 6; ++q) {
+      for (int a = 0; a < 6; ++a) {
+        J[q * 6 + a] = S[q] * LinvT[q * 6 + a];
+      }
+    }
+  } else {
+    for (int q = 0; q < 6; ++q) {
+      J[q * 6 + q] = S[q];
+    }
+  }
+
+  for (int a = 0; a < 6; ++a) {
+    double ga = 0.0;
+    for (int q = 0; q < 6; ++q) {
+      ga += J[q * 6 + a] * d[q];
+    }
+    g[a] += weight * ga;
+    for (int b = 0; b < 6; ++b) {
+      double hab = 0.0;
+      for (int q = 0; q < 6; ++q) {
+        hab += J[q * 6 + a] * J[q * 6 + b];
+      }
+      H[a * 6 + b] += weight * hab;
+    }
+  }
+}
+
+void add_pose_prior_to_diag_system(double* hdiag,
+                                   double* grad,
+                                   const Pose6& cur,
+                                   const Pose6& prior,
+                                   double weight,
+                                   double rot_radius) {
+  if (weight <= 0.0 || !R_finite(weight)) {
+    return;
+  }
+  double d[6] = {
+      cur.tx - prior.tx,
+      cur.ty - prior.ty,
+      cur.tz - prior.tz,
+      wrap_pi(cur.rx - prior.rx),
+      wrap_pi(cur.ry - prior.ry),
+      wrap_pi(cur.rz - prior.rz)};
+  double S[6] = {1.0, 1.0, 1.0, rot_radius, rot_radius, rot_radius};
+  for (int a = 0; a < 6; ++a) {
+    double s2 = S[a] * S[a];
+    hdiag[a] += weight * s2;
+    grad[a] += weight * s2 * d[a];
+  }
+}
+
 NumericVector extract_ref_volume(const NumericVector& data,
                                  int nx,
                                  int ny,
@@ -1941,7 +2013,11 @@ FrameFit optimize_frame_pose_ic(const NumericVector& data,
                                 double nuisance_ridge,
                                 int nthreads,
                                 bool use_se3_updates,
-                                bool se3_left_update) {
+                                bool se3_left_update,
+                                bool use_temporal_normal_prior,
+                                const Pose6& temporal_prior_pose,
+                                double temporal_prior_weight,
+                                double temporal_prior_rot_radius) {
   bool use_nuisance = use_nuisance_marginalization && nuisance_dim > 0;
   double huber_eff = huber_k;
   if (adaptive_huber) {
@@ -2186,6 +2262,17 @@ FrameFit optimize_frame_pose_ic(const NumericVector& data,
         }
       }
 
+      if (use_temporal_normal_prior) {
+        add_pose_prior_to_system(Hsolve,
+                                 gsolve,
+                                 cur,
+                                 temporal_prior_pose,
+                                 temporal_prior_weight,
+                                 temporal_prior_rot_radius,
+                                 use_whiten_modes,
+                                 use_whiten_modes ? Linv_u2xi : nullptr);
+      }
+
       double A[36];
       double rhs[6];
       double delta_v[6] = {0, 0, 0, 0, 0, 0};
@@ -2304,7 +2391,11 @@ FrameFit optimize_frame_pose(const NumericVector& data,
                              int capture_topk,
                              EstimateInterpMode interp_mode = EST_LINEAR,
                              bool use_se3_updates = false,
-                             bool se3_left_update = true) {
+                             bool se3_left_update = true,
+                             bool use_temporal_normal_prior = false,
+                             const Pose6& temporal_prior_pose = Pose6{0, 0, 0, 0, 0, 0},
+                             double temporal_prior_weight = 0.0,
+                             double temporal_prior_rot_radius = 50.0) {
   std::vector<Pose6> seeds;
   int n_keep = std::max(n_restarts, capture_boost ? capture_topk : n_restarts);
   if (n_keep > 0 || capture_boost) {
@@ -2392,6 +2483,14 @@ FrameFit optimize_frame_pose(const NumericVector& data,
         if (!R_finite(hdiag[d]) || hdiag[d] < 1e-6) {
           hdiag[d] = 1e-6;
         }
+      }
+      if (use_temporal_normal_prior) {
+        add_pose_prior_to_diag_system(hdiag,
+                                      grad,
+                                      cur,
+                                      temporal_prior_pose,
+                                      temporal_prior_weight,
+                                      temporal_prior_rot_radius);
       }
 
       Pose6 delta = make_pose(
@@ -2792,6 +2891,12 @@ List cpp_volreg_estimate(
   }
   std::string se3_update_order = get_string_ctrl(control, "se3_update_order", "left");
   bool se3_left_update = se3_update_order != "right";
+  bool use_temporal_normal_prior = false;
+  if (control.containsElementNamed("use_temporal_normal_prior")) {
+    use_temporal_normal_prior = as<bool>(control["use_temporal_normal_prior"]);
+  }
+  double temporal_normal_prior_weight = get_dbl_ctrl(control, "temporal_normal_prior_weight", 0.0);
+  double temporal_normal_prior_rot_radius = get_dbl_ctrl(control, "temporal_normal_prior_rot_radius", 50.0);
   bool parallel_frames = false;
   if (control.containsElementNamed("parallel_frames")) {
     parallel_frames = as<bool>(control["parallel_frames"]);
@@ -3042,7 +3147,11 @@ List cpp_volreg_estimate(
                                         nuisance_ridge,
                                         fit_nthreads,
                                         use_se3_updates,
-                                        se3_left_update);
+                                        se3_left_update,
+                                        use_temporal_normal_prior,
+                                        init_pose,
+                                        temporal_normal_prior_weight,
+                                        temporal_normal_prior_rot_radius);
         };
         auto fixed_objective = [&](const Pose6& pose) {
           if (use_nuisance_marginalization && level.nuisance_dim > 0) {
@@ -3118,7 +3227,11 @@ List cpp_volreg_estimate(
                                           nuisance_ridge,
                                           fit_nthreads,
                                           use_se3_updates,
-                                          se3_left_update);
+                                          se3_left_update,
+                                          use_temporal_normal_prior,
+                                          fit_ic.pose,
+                                          temporal_normal_prior_weight,
+                                          temporal_normal_prior_rot_radius);
           };
           auto polish_fixed_objective = [&](const Pose6& pose) {
             if (use_nuisance_marginalization && level.polish_nuisance_dim > 0) {
@@ -3199,7 +3312,11 @@ List cpp_volreg_estimate(
                                                     0,
                                                     dense_polish_interp,
                                                     use_se3_updates,
-                                                    se3_left_update);
+                                                    se3_left_update,
+                                                    use_temporal_normal_prior,
+                                                    fit_ic.pose,
+                                                    temporal_normal_prior_weight,
+                                                    temporal_normal_prior_rot_radius);
           fit_polish.restart_used = fit_ic.restart_used;
           fit_polish.iters += fit_ic.iters;
           fit_polish.flags |= fit_ic.flags;
@@ -3231,7 +3348,11 @@ List cpp_volreg_estimate(
                                  first_level ? capture_topk : 0,
                                  dense_interp,
                                  use_se3_updates,
-                                 se3_left_update);
+                                 se3_left_update,
+                                 use_temporal_normal_prior,
+                                 init_pose,
+                                 temporal_normal_prior_weight,
+                                 temporal_normal_prior_rot_radius);
     };
 
     auto fit_one = [&](int frame_t, const Pose6& init_pose) {

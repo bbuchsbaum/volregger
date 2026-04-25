@@ -23,6 +23,8 @@ defaults <- list(
   volreg_huber_k = NULL,
   volreg_max_iter = NULL,
   volreg_edge_exclude_frac = NULL,
+  volreg_temporal_prior_weight = NULL,
+  volreg_temporal_prior_rot_radius = NULL,
   volreg_ref = "robust_mean",
   nifreeze_model = "mean",
   afni_image = "afni/afni_make_build",
@@ -237,6 +239,8 @@ run_one <- function(method, scenario_name) {
         if (!is.null(opts$volreg_huber_k)) c("--huber-k", opts$volreg_huber_k),
         if (!is.null(opts$volreg_max_iter)) c("--max-iter", opts$volreg_max_iter),
         if (!is.null(opts$volreg_edge_exclude_frac)) c("--edge-exclude-frac", opts$volreg_edge_exclude_frac),
+        if (!is.null(opts$volreg_temporal_prior_weight)) c("--temporal-prior-weight", opts$volreg_temporal_prior_weight),
+        if (!is.null(opts$volreg_temporal_prior_rot_radius)) c("--temporal-prior-rot-radius", opts$volreg_temporal_prior_rot_radius),
         "--nthreads", as.character(nthreads)
       ),
       stdout_path = stdout_path,
@@ -255,6 +259,7 @@ run_one <- function(method, scenario_name) {
     actual_huber <- opts$volreg_huber_k %||% "default"
     actual_iter <- opts$volreg_max_iter %||% "default"
     actual_edge <- opts$volreg_edge_exclude_frac %||% 0
+    actual_temporal_prior <- opts$volreg_temporal_prior_weight %||% "default"
     if (!is.null(run_meta)) {
       if ("huber_k" %in% names(run_meta) && is.finite(run_meta$huber_k[1])) {
         actual_huber <- run_meta$huber_k[1]
@@ -264,6 +269,9 @@ run_one <- function(method, scenario_name) {
       }
       if ("edge_exclude_frac" %in% names(run_meta) && is.finite(run_meta$edge_exclude_frac[1])) {
         actual_edge <- run_meta$edge_exclude_frac[1]
+      }
+      if ("temporal_normal_prior_weight" %in% names(run_meta) && is.finite(run_meta$temporal_normal_prior_weight[1])) {
+        actual_temporal_prior <- run_meta$temporal_normal_prior_weight[1]
       }
     }
     meta <- data.frame(
@@ -277,6 +285,7 @@ run_one <- function(method, scenario_name) {
         paste0("huber", actual_huber),
         paste0("iter", actual_iter),
         paste0("edge", actual_edge),
+        paste0("tprior", actual_temporal_prior),
         paste0("threads", nthreads),
         sep = ":"
       ),
