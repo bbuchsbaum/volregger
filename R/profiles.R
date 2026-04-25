@@ -146,7 +146,7 @@ volreg_profile <- function(
     ),
     ic_nuisance_adaptive_tuned = list(
       engine = "rigid_robust",
-      components = c("capture_boost", "ic_stencil", "whiten", "nuisance", "adaptive_huber", "huber_0.25", "iter_12"),
+      components = c("capture_boost", "ic_stencil", "whiten", "nuisance", "adaptive_huber", "huber_0.15", "iter_12"),
       control = list(
         use_ic_stencil = TRUE,
         whiten_modes = TRUE,
@@ -156,7 +156,7 @@ volreg_profile <- function(
         nuisance_ridge = 1e-4,
         adaptive_huber = TRUE,
         template_refresh_valid_only = TRUE,
-        huber_k = 0.25,
+        huber_k = 0.15,
         max_iter = 12L
       )
     ),
