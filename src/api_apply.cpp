@@ -428,6 +428,53 @@ inline void fixed_to_moving_vox_zpad(int i,
   src_xyz[2] -= zpad;
 }
 
+struct VoxelMap {
+  double ax[3];
+  double ay[3];
+  double az[3];
+  double c[3];
+};
+
+inline VoxelMap make_voxel_map(int nx,
+                               int ny,
+                               int nz,
+                               const NumericVector& pixdim,
+                               double tx,
+                               double ty,
+                               double tz,
+                               double rx,
+                               double ry,
+                               double rz) {
+  double R[9];
+  rotation_matrix(rx, ry, rz, R);
+
+  double cx = 0.5 * (nx - 1.0);
+  double cy = 0.5 * (ny - 1.0);
+  double cz = 0.5 * (nz - 1.0);
+  double px = pixdim[0];
+  double py = pixdim[1];
+  double pz = pixdim[2];
+  double center_w[3] = {cx * px, cy * py, cz * pz};
+  double trans[3] = {tx, ty, tz};
+
+  VoxelMap map;
+  double invp[3] = {1.0 / px, 1.0 / py, 1.0 / pz};
+  for (int r = 0; r < 3; ++r) {
+    int r0 = r;
+    int r1 = r + 3;
+    int r2 = r + 6;
+    map.ax[r] = R[r0] * px * invp[r];
+    map.ay[r] = R[r1] * py * invp[r];
+    map.az[r] = R[r2] * pz * invp[r];
+    map.c[r] = (-R[r0] * (center_w[0] + trans[0]) -
+                R[r1] * (center_w[1] + trans[1]) -
+                R[r2] * (center_w[2] + trans[2])) *
+                   invp[r] +
+               (r == 0 ? cx : (r == 1 ? cy : cz));
+  }
+  return map;
+}
+
 }  // namespace
 
 // [[Rcpp::export]]
@@ -575,13 +622,18 @@ SEXP cpp_volreg_apply(
         rz = (1.0 - a) * par(t0, 5) + a * par(t1, 5);
       }
 
+      VoxelMap map = make_voxel_map(nx, ny, nz, pixdim, tx, ty, tz, rx, ry, rz);
       for (int j = 0; j < ny; ++j) {
+        double row0 = map.ay[0] * j + map.az[0] * k + map.c[0];
+        double row1 = map.ay[1] * j + map.az[1] * k + map.c[1];
+        double row2 = map.ay[2] * j + map.az[2] * k + map.c[2];
+        double xsrc = row0;
+        double ysrc = row1;
+        double zsrc = row2;
         for (int i = 0; i < nx; ++i) {
-          if (zpad > 0) {
-            fixed_to_moving_vox_zpad(i, j, k, nx, ny, nz, zpad, pixdim, tx, ty, tz, rx, ry, rz, src);
-          } else {
-            fixed_to_moving_vox(i, j, k, nx, ny, nz, pixdim, tx, ty, tz, rx, ry, rz, src);
-          }
+          src[0] = xsrc;
+          src[1] = ysrc;
+          src[2] = zsrc;
           double v = 0.0;
           if (mode == LINEAR) {
             if (zero_pad) {
@@ -615,6 +667,9 @@ SEXP cpp_volreg_apply(
             }
           }
           out_ptr[off + static_cast<size_t>(i + nx * (j + ny * k))] = v;
+          xsrc += map.ax[0];
+          ysrc += map.ax[1];
+          zsrc += map.ax[2];
         }
       }
     }
