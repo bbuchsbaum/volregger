@@ -70,30 +70,66 @@ inline void rotation_matrix(double rx, double ry, double rz, double* R) {
   R[8] = cy * cx;
 }
 
-inline double sample_trilinear(const NumericVector& data,
+inline double sample_at_clamp(const double* frame,
+                              int nx,
+                              int ny,
+                              int nz,
+                              int i,
+                              int j,
+                              int k) {
+  i = clamp_int(i, 0, nx - 1);
+  j = clamp_int(j, 0, ny - 1);
+  k = clamp_int(k, 0, nz - 1);
+  size_t idx = static_cast<size_t>(i + nx * (j + ny * k));
+  return frame[idx];
+}
+
+inline double sample_at_raw(const double* frame,
+                            int nx,
+                            int ny,
+                            int i,
+                            int j,
+                            int k) {
+  size_t idx = static_cast<size_t>(i + nx * (j + ny * k));
+  return frame[idx];
+}
+
+inline double sample_at_zero(const double* frame,
+                             int nx,
+                             int ny,
+                             int nz,
+                             int i,
+                             int j,
+                             int k) {
+  if (i < 0 || i >= nx || j < 0 || j >= ny || k < 0 || k >= nz) {
+    return 0.0;
+  }
+  size_t idx = static_cast<size_t>(i + nx * (j + ny * k));
+  return frame[idx];
+}
+
+template <bool ZeroPad>
+inline double sample_at_padded(const double* frame,
                                int nx,
                                int ny,
                                int nz,
-                               int nxyz,
-                               int t,
+                               int i,
+                               int j,
+                               int k) {
+  if (ZeroPad) {
+    return sample_at_zero(frame, nx, ny, nz, i, j, k);
+  }
+  return sample_at_clamp(frame, nx, ny, nz, i, j, k);
+}
+
+template <bool ZeroPad>
+inline double sample_trilinear(const double* frame,
+                               int nx,
+                               int ny,
+                               int nz,
                                double x,
                                double y,
-                               double z,
-                               int pad_mode) {
-  auto sample_at = [&](int i, int j, int k) {
-    if (pad_mode == 1) {
-      // zero padding
-      if (i < 0 || i >= nx || j < 0 || j >= ny || k < 0 || k >= nz) {
-        return 0.0;
-      }
-    }
-    i = clamp_int(i, 0, nx - 1);
-    j = clamp_int(j, 0, ny - 1);
-    k = clamp_int(k, 0, nz - 1);
-    size_t off = static_cast<size_t>(nxyz) * t;
-    size_t idx = static_cast<size_t>(i + nx * (j + ny * k));
-    return data[off + idx];
-  };
+                               double z) {
 
   int x0 = static_cast<int>(std::floor(x));
   int y0 = static_cast<int>(std::floor(y));
@@ -106,14 +142,28 @@ inline double sample_trilinear(const NumericVector& data,
   double ay = y - y0;
   double az = z - z0;
 
-  double c000 = sample_at(x0, y0, z0);
-  double c100 = sample_at(x1, y0, z0);
-  double c010 = sample_at(x0, y1, z0);
-  double c110 = sample_at(x1, y1, z0);
-  double c001 = sample_at(x0, y0, z1);
-  double c101 = sample_at(x1, y0, z1);
-  double c011 = sample_at(x0, y1, z1);
-  double c111 = sample_at(x1, y1, z1);
+  bool inside = x0 >= 0 && x1 < nx && y0 >= 0 && y1 < ny && z0 >= 0 && z1 < nz;
+
+  double c000, c100, c010, c110, c001, c101, c011, c111;
+  if (inside) {
+    c000 = sample_at_raw(frame, nx, ny, x0, y0, z0);
+    c100 = sample_at_raw(frame, nx, ny, x1, y0, z0);
+    c010 = sample_at_raw(frame, nx, ny, x0, y1, z0);
+    c110 = sample_at_raw(frame, nx, ny, x1, y1, z0);
+    c001 = sample_at_raw(frame, nx, ny, x0, y0, z1);
+    c101 = sample_at_raw(frame, nx, ny, x1, y0, z1);
+    c011 = sample_at_raw(frame, nx, ny, x0, y1, z1);
+    c111 = sample_at_raw(frame, nx, ny, x1, y1, z1);
+  } else {
+    c000 = sample_at_padded<ZeroPad>(frame, nx, ny, nz, x0, y0, z0);
+    c100 = sample_at_padded<ZeroPad>(frame, nx, ny, nz, x1, y0, z0);
+    c010 = sample_at_padded<ZeroPad>(frame, nx, ny, nz, x0, y1, z0);
+    c110 = sample_at_padded<ZeroPad>(frame, nx, ny, nz, x1, y1, z0);
+    c001 = sample_at_padded<ZeroPad>(frame, nx, ny, nz, x0, y0, z1);
+    c101 = sample_at_padded<ZeroPad>(frame, nx, ny, nz, x1, y0, z1);
+    c011 = sample_at_padded<ZeroPad>(frame, nx, ny, nz, x0, y1, z1);
+    c111 = sample_at_padded<ZeroPad>(frame, nx, ny, nz, x1, y1, z1);
+  }
 
   double c00 = c000 * (1.0 - ax) + c100 * ax;
   double c10 = c010 * (1.0 - ax) + c110 * ax;
@@ -124,29 +174,6 @@ inline double sample_trilinear(const NumericVector& data,
   double c1 = c01 * (1.0 - ay) + c11 * ay;
 
   return c0 * (1.0 - az) + c1 * az;
-}
-
-inline double sample_at(const NumericVector& data,
-                        int nx,
-                        int ny,
-                        int nz,
-                        int nxyz,
-                        int t,
-                        int i,
-                        int j,
-                        int k,
-                        int pad_mode) {
-  if (pad_mode == 1) {
-    if (i < 0 || i >= nx || j < 0 || j >= ny || k < 0 || k >= nz) {
-      return 0.0;
-    }
-  }
-  i = clamp_int(i, 0, nx - 1);
-  j = clamp_int(j, 0, ny - 1);
-  k = clamp_int(k, 0, nz - 1);
-  size_t off = static_cast<size_t>(nxyz) * t;
-  size_t idx = static_cast<size_t>(i + nx * (j + ny * k));
-  return data[off + idx];
 }
 
 inline double cubic_weight(double x) {
@@ -162,16 +189,14 @@ inline double cubic_weight(double x) {
   return 0.0;
 }
 
-inline double sample_cubic(const NumericVector& data,
+template <bool ZeroPad>
+inline double sample_cubic(const double* frame,
                            int nx,
                            int ny,
                            int nz,
-                           int nxyz,
-                           int t,
                            double x,
                            double y,
-                           double z,
-                           int pad_mode) {
+                           double z) {
   int x0 = static_cast<int>(std::floor(x)) - 1;
   int y0 = static_cast<int>(std::floor(y)) - 1;
   int z0 = static_cast<int>(std::floor(z)) - 1;
@@ -191,20 +216,41 @@ inline double sample_cubic(const NumericVector& data,
     wzs[kk] = cubic_weight(z - zs[kk]);
   }
 
+  bool inside = xs[0] >= 0 && xs[3] < nx &&
+                ys[0] >= 0 && ys[3] < ny &&
+                zs[0] >= 0 && zs[3] < nz;
   double out = 0.0;
   double wsum = 0.0;
-  for (int kk = 0; kk < 4; ++kk) {
-    int zk = zs[kk];
-    double wz = wzs[kk];
-    for (int jj = 0; jj < 4; ++jj) {
-      int yj = ys[jj];
-      double wy = wys[jj];
-      for (int ii = 0; ii < 4; ++ii) {
-        int xi = xs[ii];
-        double wx = wxs[ii];
-        double w = wx * wy * wz;
-        out += w * sample_at(data, nx, ny, nz, nxyz, t, xi, yj, zk, pad_mode);
-        wsum += w;
+  if (inside) {
+    for (int kk = 0; kk < 4; ++kk) {
+      int zk = zs[kk];
+      double wz = wzs[kk];
+      for (int jj = 0; jj < 4; ++jj) {
+        int yj = ys[jj];
+        double wy = wys[jj];
+        for (int ii = 0; ii < 4; ++ii) {
+          int xi = xs[ii];
+          double wx = wxs[ii];
+          double w = wx * wy * wz;
+          out += w * sample_at_raw(frame, nx, ny, xi, yj, zk);
+          wsum += w;
+        }
+      }
+    }
+  } else {
+    for (int kk = 0; kk < 4; ++kk) {
+      int zk = zs[kk];
+      double wz = wzs[kk];
+      for (int jj = 0; jj < 4; ++jj) {
+        int yj = ys[jj];
+        double wy = wys[jj];
+        for (int ii = 0; ii < 4; ++ii) {
+          int xi = xs[ii];
+          double wx = wxs[ii];
+          double w = wx * wy * wz;
+          out += w * sample_at_padded<ZeroPad>(frame, nx, ny, nz, xi, yj, zk);
+          wsum += w;
+        }
       }
     }
   }
@@ -230,16 +276,14 @@ inline double lanczos_weight(double x, int a) {
   return sinc_pi(x) * sinc_pi(x / static_cast<double>(a));
 }
 
-inline double sample_lanczos(const NumericVector& data,
+template <bool ZeroPad>
+inline double sample_lanczos(const double* frame,
                              int nx,
                              int ny,
                              int nz,
-                             int nxyz,
-                             int t,
                              double x,
                              double y,
                              double z,
-                             int pad_mode,
                              int a = 3) {
   int x0 = static_cast<int>(std::floor(x)) - a + 1;
   int y0 = static_cast<int>(std::floor(y)) - a + 1;
@@ -261,23 +305,47 @@ inline double sample_lanczos(const NumericVector& data,
     wzs[kk] = lanczos_weight(z - zs[kk], a);
   }
 
+  bool inside = xs[0] >= 0 && xs[width - 1] < nx &&
+                ys[0] >= 0 && ys[width - 1] < ny &&
+                zs[0] >= 0 && zs[width - 1] < nz;
   double out = 0.0;
   double wsum = 0.0;
-  for (int kk = 0; kk < width; ++kk) {
-    int zk = zs[kk];
-    double wz = wzs[kk];
-    if (wz == 0.0) continue;
-    for (int jj = 0; jj < width; ++jj) {
-      int yj = ys[jj];
-      double wy = wys[jj];
-      if (wy == 0.0) continue;
-      for (int ii = 0; ii < width; ++ii) {
-        int xi = xs[ii];
-        double wx = wxs[ii];
-        if (wx == 0.0) continue;
-        double w = wx * wy * wz;
-        out += w * sample_at(data, nx, ny, nz, nxyz, t, xi, yj, zk, pad_mode);
-        wsum += w;
+  if (inside) {
+    for (int kk = 0; kk < width; ++kk) {
+      int zk = zs[kk];
+      double wz = wzs[kk];
+      if (wz == 0.0) continue;
+      for (int jj = 0; jj < width; ++jj) {
+        int yj = ys[jj];
+        double wy = wys[jj];
+        if (wy == 0.0) continue;
+        for (int ii = 0; ii < width; ++ii) {
+          int xi = xs[ii];
+          double wx = wxs[ii];
+          if (wx == 0.0) continue;
+          double w = wx * wy * wz;
+          out += w * sample_at_raw(frame, nx, ny, xi, yj, zk);
+          wsum += w;
+        }
+      }
+    }
+  } else {
+    for (int kk = 0; kk < width; ++kk) {
+      int zk = zs[kk];
+      double wz = wzs[kk];
+      if (wz == 0.0) continue;
+      for (int jj = 0; jj < width; ++jj) {
+        int yj = ys[jj];
+        double wy = wys[jj];
+        if (wy == 0.0) continue;
+        for (int ii = 0; ii < width; ++ii) {
+          int xi = xs[ii];
+          double wx = wxs[ii];
+          if (wx == 0.0) continue;
+          double w = wx * wy * wz;
+          out += w * sample_at_padded<ZeroPad>(frame, nx, ny, nz, xi, yj, zk);
+          wsum += w;
+        }
       }
     }
   }
@@ -407,6 +475,9 @@ SEXP cpp_volreg_apply(
 
   NumericVector out(data.size());
   out.attr("dim") = dim;
+  const double* data_ptr = data.begin();
+  double* out_ptr = out.begin();
+  bool zero_pad = pad_mode == 1;
 
   std::vector<double> slice_offsets(nz, 0.0);
   bool use_packet_pose = false;
@@ -476,6 +547,7 @@ SEXP cpp_volreg_apply(
       int t = static_cast<int>(task / static_cast<size_t>(nz));
       int k = static_cast<int>(task % static_cast<size_t>(nz));
       size_t off = static_cast<size_t>(nxyz) * static_cast<size_t>(t);
+      const double* frame = data_ptr + off;
 
       double tx = par(t, 0);
       double ty = par(t, 1);
@@ -508,13 +580,25 @@ SEXP cpp_volreg_apply(
           }
           double v = 0.0;
           if (mode == LINEAR) {
-            v = sample_trilinear(data, nx, ny, nz, nxyz, t, src[0], src[1], src[2], pad_mode);
+            if (zero_pad) {
+              v = sample_trilinear<true>(frame, nx, ny, nz, src[0], src[1], src[2]);
+            } else {
+              v = sample_trilinear<false>(frame, nx, ny, nz, src[0], src[1], src[2]);
+            }
           } else if (mode == BSPLINE) {
-            v = sample_cubic(data, nx, ny, nz, nxyz, t, src[0], src[1], src[2], pad_mode);
+            if (zero_pad) {
+              v = sample_cubic<true>(frame, nx, ny, nz, src[0], src[1], src[2]);
+            } else {
+              v = sample_cubic<false>(frame, nx, ny, nz, src[0], src[1], src[2]);
+            }
           } else {
-            v = sample_lanczos(data, nx, ny, nz, nxyz, t, src[0], src[1], src[2], pad_mode, 3);
+            if (zero_pad) {
+              v = sample_lanczos<true>(frame, nx, ny, nz, src[0], src[1], src[2], 3);
+            } else {
+              v = sample_lanczos<false>(frame, nx, ny, nz, src[0], src[1], src[2], 3);
+            }
           }
-          out[off + static_cast<size_t>(i + nx * (j + ny * k))] = v;
+          out_ptr[off + static_cast<size_t>(i + nx * (j + ny * k))] = v;
         }
       }
     }
