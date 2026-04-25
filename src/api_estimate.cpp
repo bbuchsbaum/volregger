@@ -65,6 +65,8 @@ struct Pose6 {
   double rz;
 };
 
+inline void rotation_matrix(double rx, double ry, double rz, double* R);
+
 double wrap_pi(double a) {
   const double two_pi = 2.0 * M_PI;
   while (a > M_PI) {
@@ -115,6 +117,88 @@ double pose_step_norm(const Pose6& a, const Pose6& b, double radius = 50.0) {
   double dry = (a.ry - b.ry) * radius;
   double drz = (a.rz - b.rz) * radius;
   return std::sqrt(dtx * dtx + dty * dty + dtz * dtz + drx * drx + dry * dry + drz * drz);
+}
+
+void pose_to_hmat(const Pose6& p, double* M) {
+  double R[9];
+  rotation_matrix(p.rx, p.ry, p.rz, R);
+  M[0] = R[0];
+  M[1] = R[1];
+  M[2] = R[2];
+  M[3] = p.tx;
+  M[4] = R[3];
+  M[5] = R[4];
+  M[6] = R[5];
+  M[7] = p.ty;
+  M[8] = R[6];
+  M[9] = R[7];
+  M[10] = R[8];
+  M[11] = p.tz;
+  M[12] = 0.0;
+  M[13] = 0.0;
+  M[14] = 0.0;
+  M[15] = 1.0;
+}
+
+void hmat_multiply(const double* A, const double* B, double* C) {
+  for (int r = 0; r < 4; ++r) {
+    for (int c = 0; c < 4; ++c) {
+      double s = 0.0;
+      for (int k = 0; k < 4; ++k) {
+        s += A[r * 4 + k] * B[k * 4 + c];
+      }
+      C[r * 4 + c] = s;
+    }
+  }
+}
+
+Pose6 hmat_to_pose(const double* M) {
+  double r00 = M[0];
+  double r10 = M[4];
+  double r20 = M[8];
+  double r21 = M[9];
+  double r22 = M[10];
+  double r11 = M[5];
+  double r12 = M[6];
+
+  double ry = std::asin(std::max(-1.0, std::min(1.0, -r20)));
+  double cy = std::cos(ry);
+  double rx = 0.0;
+  double rz = 0.0;
+  if (std::abs(cy) > 1e-8) {
+    rx = std::atan2(r21, r22);
+    rz = std::atan2(r10, r00);
+  } else {
+    rx = std::atan2(-r12, r11);
+    rz = 0.0;
+  }
+  return make_pose(M[3], M[7], M[11], rx, ry, rz);
+}
+
+Pose6 compose_pose_update(const Pose6& cur, const Pose6& delta, double alpha, bool left_update) {
+  double A[16];
+  double B[16];
+  double C[16];
+  Pose6 step = scale_pose(delta, alpha);
+  pose_to_hmat(cur, A);
+  pose_to_hmat(step, B);
+  if (left_update) {
+    hmat_multiply(B, A, C);
+  } else {
+    hmat_multiply(A, B, C);
+  }
+  return hmat_to_pose(C);
+}
+
+Pose6 optimizer_update_pose(const Pose6& cur,
+                            const Pose6& delta,
+                            double alpha,
+                            bool use_se3_updates,
+                            bool se3_left_update) {
+  if (use_se3_updates) {
+    return compose_pose_update(cur, delta, alpha, se3_left_update);
+  }
+  return add_pose(cur, scale_pose(delta, alpha));
 }
 
 NumericVector extract_ref_volume(const NumericVector& data,
@@ -1855,7 +1939,9 @@ FrameFit optimize_frame_pose_ic(const NumericVector& data,
                                 bool use_nuisance_marginalization,
                                 int nuisance_dim,
                                 double nuisance_ridge,
-                                int nthreads) {
+                                int nthreads,
+                                bool use_se3_updates,
+                                bool se3_left_update) {
   bool use_nuisance = use_nuisance_marginalization && nuisance_dim > 0;
   double huber_eff = huber_k;
   if (adaptive_huber) {
@@ -2143,7 +2229,7 @@ FrameFit optimize_frame_pose_ic(const NumericVector& data,
       double c_new = c_prev;
 
       for (int ls = 0; ls < 8; ++ls) {
-        Pose6 cand = add_pose(cur, scale_pose(delta, alpha));
+        Pose6 cand = optimizer_update_pose(cur, delta, alpha, use_se3_updates, se3_left_update);
         c_new = eval_pose(cand).cost;
         if (c_new < c_prev) {
           cur = cand;
@@ -2216,7 +2302,9 @@ FrameFit optimize_frame_pose(const NumericVector& data,
                              double capture_trans_mm,
                              double capture_rot_deg,
                              int capture_topk,
-                             EstimateInterpMode interp_mode = EST_LINEAR) {
+                             EstimateInterpMode interp_mode = EST_LINEAR,
+                             bool use_se3_updates = false,
+                             bool se3_left_update = true) {
   std::vector<Pose6> seeds;
   int n_keep = std::max(n_restarts, capture_boost ? capture_topk : n_restarts);
   if (n_keep > 0 || capture_boost) {
@@ -2322,7 +2410,7 @@ FrameFit optimize_frame_pose(const NumericVector& data,
       double c_new = c_prev;
 
       for (int ls = 0; ls < 8; ++ls) {
-        Pose6 cand = add_pose(cur, scale_pose(delta, alpha));
+        Pose6 cand = optimizer_update_pose(cur, delta, alpha, use_se3_updates, se3_left_update);
         c_new = evaluate_cost(data, tmpl, nx, ny, nz, nxyz, t, pixdim, samples, cand, huber_eff, use_overlap_taper, interp_mode)
                     .cost;
         if (c_new < c_prev) {
@@ -2698,6 +2786,12 @@ List cpp_volreg_estimate(
   double temporal_regularization_alpha = get_dbl_ctrl(control, "temporal_regularization_alpha", 0.25);
   double temporal_regularization_cost_tol = get_dbl_ctrl(control, "temporal_regularization_cost_tol", 0.002);
   double temporal_regularization_fd_max = get_dbl_ctrl(control, "temporal_regularization_fd_max", 0.8);
+  bool use_se3_updates = false;
+  if (control.containsElementNamed("use_se3_updates")) {
+    use_se3_updates = as<bool>(control["use_se3_updates"]);
+  }
+  std::string se3_update_order = get_string_ctrl(control, "se3_update_order", "left");
+  bool se3_left_update = se3_update_order != "right";
   bool parallel_frames = false;
   if (control.containsElementNamed("parallel_frames")) {
     parallel_frames = as<bool>(control["parallel_frames"]);
@@ -2946,7 +3040,9 @@ List cpp_volreg_estimate(
                                         use_nuisance_marginalization,
                                         level.nuisance_dim,
                                         nuisance_ridge,
-                                        fit_nthreads);
+                                        fit_nthreads,
+                                        use_se3_updates,
+                                        se3_left_update);
         };
         auto fixed_objective = [&](const Pose6& pose) {
           if (use_nuisance_marginalization && level.nuisance_dim > 0) {
@@ -3020,7 +3116,9 @@ List cpp_volreg_estimate(
                                           use_nuisance_marginalization,
                                           level.polish_nuisance_dim,
                                           nuisance_ridge,
-                                          fit_nthreads);
+                                          fit_nthreads,
+                                          use_se3_updates,
+                                          se3_left_update);
           };
           auto polish_fixed_objective = [&](const Pose6& pose) {
             if (use_nuisance_marginalization && level.polish_nuisance_dim > 0) {
@@ -3099,7 +3197,9 @@ List cpp_volreg_estimate(
                                                     capture_trans_mm,
                                                     capture_rot_deg,
                                                     0,
-                                                    dense_polish_interp);
+                                                    dense_polish_interp,
+                                                    use_se3_updates,
+                                                    se3_left_update);
           fit_polish.restart_used = fit_ic.restart_used;
           fit_polish.iters += fit_ic.iters;
           fit_polish.flags |= fit_ic.flags;
@@ -3129,7 +3229,9 @@ List cpp_volreg_estimate(
                                  capture_trans_mm,
                                  capture_rot_deg,
                                  first_level ? capture_topk : 0,
-                                 dense_interp);
+                                 dense_interp,
+                                 use_se3_updates,
+                                 se3_left_update);
     };
 
     auto fit_one = [&](int frame_t, const Pose6& init_pose) {

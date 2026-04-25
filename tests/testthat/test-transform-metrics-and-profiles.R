@@ -169,6 +169,17 @@ test_that("temporal-guard profile enables objective-gated low-motion smoothing",
   expect_true(isTRUE(prof$control$parallel_frames))
 })
 
+test_that("SE3 profile enables opt-in composed optimizer updates", {
+  prof <- volreg_profile("ic_nuisance_se3")
+
+  expect_s3_class(prof, "volreg_profile")
+  expect_true("se3_updates" %in% prof$components)
+  expect_true(isTRUE(prof$control$use_se3_updates))
+  expect_equal(prof$control$se3_update_order, "left")
+  expect_true(isTRUE(prof$control$parallel_frames))
+  expect_equal(prof$control$huber_k, 0.15)
+})
+
 test_that("adaptive-Huber profile keeps IC setup and scales robust threshold", {
   prof <- volreg_profile("ic_nuisance_adaptive")
 

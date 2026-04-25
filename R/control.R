@@ -41,6 +41,8 @@ volreg_control <- function() {
     temporal_regularization_alpha = 0.25,
     temporal_regularization_cost_tol = 0.002,
     temporal_regularization_fd_max = 0.8,
+    use_se3_updates = FALSE,
+    se3_update_order = "left",
     parallel_frames = FALSE,
     whiten_modes = TRUE,
     whiten_reg = 1e-6,
