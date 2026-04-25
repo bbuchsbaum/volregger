@@ -965,6 +965,67 @@ summarize_no_regression_gate <- function(gate) {
   )
 }
 
+make_tsnr_context <- function(raw, primary_method = "volregger", truth_only = TRUE) {
+  if (isTRUE(truth_only)) {
+    raw <- raw[raw$dataset_mode == "truth_injected", , drop = FALSE]
+  }
+  scenarios <- unique(raw$scenario)
+  rows <- list()
+  row_idx <- 1L
+
+  metric_value <- function(row, metric) {
+    if (!metric %in% names(row)) {
+      return(NA_real_)
+    }
+    row[[metric]]
+  }
+
+  for (scenario_name in scenarios) {
+    primary <- raw[raw$scenario == scenario_name & raw$method == primary_method & raw$status == "ok", , drop = FALSE]
+    if (nrow(primary) != 1L) {
+      next
+    }
+    baselines <- raw[raw$scenario == scenario_name & raw$method != primary_method & raw$status == "ok", , drop = FALSE]
+    if (!nrow(baselines)) {
+      next
+    }
+
+    for (baseline_idx in seq_len(nrow(baselines))) {
+      baseline <- baselines[baseline_idx, , drop = FALSE]
+      rows[[row_idx]] <- data.frame(
+        scenario = scenario_name,
+        dataset_mode = primary$dataset_mode,
+        baseline = baseline$method,
+        tsnr_primary = metric_value(primary, "tsnr_ratio"),
+        tsnr_baseline = metric_value(baseline, "tsnr_ratio"),
+        tsnr_delta = metric_value(primary, "tsnr_ratio") - metric_value(baseline, "tsnr_ratio"),
+        blur_primary = metric_value(primary, "blur_proxy_ratio"),
+        blur_baseline = metric_value(baseline, "blur_proxy_ratio"),
+        blur_delta = metric_value(primary, "blur_proxy_ratio") - metric_value(baseline, "blur_proxy_ratio"),
+        disp_p95_margin = metric_value(baseline, "disp_p95") - metric_value(primary, "disp_p95"),
+        fd_error_margin = metric_value(baseline, "fd_error") - metric_value(primary, "fd_error"),
+        fd_corr_margin = metric_value(primary, "fd_corr_to_truth") - metric_value(baseline, "fd_corr_to_truth"),
+        pose_jitter_margin = metric_value(baseline, "pose_jitter_error") - metric_value(primary, "pose_jitter_error"),
+        nrmse_margin = metric_value(baseline, "nrmse_to_truth") - metric_value(primary, "nrmse_to_truth"),
+        edge_error_margin = metric_value(baseline, "edge_error_to_truth") - metric_value(primary, "edge_error_to_truth"),
+        fidelity_loss_margin = metric_value(baseline, "truth_image_fidelity_loss") - metric_value(primary, "truth_image_fidelity_loss"),
+        tsnr_loss = metric_value(primary, "tsnr_ratio") < metric_value(baseline, "tsnr_ratio") - 1e-8,
+        truth_fidelity_win = metric_value(primary, "truth_image_fidelity_loss") < metric_value(baseline, "truth_image_fidelity_loss") - 1e-8,
+        edge_win = metric_value(primary, "edge_error_to_truth") < metric_value(baseline, "edge_error_to_truth") - 1e-8,
+        displacement_win = metric_value(primary, "disp_p95") < metric_value(baseline, "disp_p95") - 1e-8,
+        stringsAsFactors = FALSE
+      )
+      row_idx <- row_idx + 1L
+    }
+  }
+
+  if (length(rows)) {
+    do.call(rbind, rows)
+  } else {
+    data.frame()
+  }
+}
+
 summarize_interpolation_guardrail <- function(raw, baseline_interp = "lanczos") {
   required <- c("interp", "scenario", "dataset_mode", "method", "status")
   missing <- setdiff(required, names(raw))

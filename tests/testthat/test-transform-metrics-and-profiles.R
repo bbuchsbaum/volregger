@@ -413,6 +413,56 @@ test_that("real-data benchmark no-regression gate includes protected diagnostics
   expect_equal(summary$regressions, 1)
 })
 
+test_that("real-data benchmark tSNR context exposes fidelity tradeoffs", {
+  env <- new.env(parent = globalenv())
+  source(testthat::test_path("..", "..", "inst", "benchmarks", "realdata_benchmark_lib.R"), local = env)
+
+  metric_names <- env$benchmark_metric_names()
+  make_row <- function(method, tsnr_ratio, fidelity_loss, edge_error, disp_p95) {
+    metric_vals <- stats::setNames(rep(NA_real_, length(metric_names)), metric_names)
+    metric_vals[["tsnr_ratio"]] <- tsnr_ratio
+    metric_vals[["truth_image_fidelity_loss"]] <- fidelity_loss
+    metric_vals[["edge_error_to_truth"]] <- edge_error
+    metric_vals[["disp_p95"]] <- disp_p95
+    metric_vals[["fd_error"]] <- if (identical(method, "volregger")) 0.8 else 2.0
+    metric_vals[["fd_corr_to_truth"]] <- if (identical(method, "volregger")) 0.98 else 0.99
+    metric_vals[["pose_jitter_error"]] <- if (identical(method, "volregger")) 0.02 else 0.05
+    metric_vals[["nrmse_to_truth"]] <- if (identical(method, "volregger")) 0.09 else 0.20
+    metric_vals[["blur_proxy_ratio"]] <- if (identical(method, "volregger")) 1.05 else 1.00
+    cbind(
+      data.frame(
+        method = method,
+        dataset_mode = "truth_injected",
+        scenario = "low_motion",
+        method_model = method,
+        elapsed_sec = NA_real_,
+        estimate_sec = NA_real_,
+        apply_sec = NA_real_,
+        report_sec = NA_real_,
+        peak_rss_mb = NA_real_,
+        temp_bytes_written = NA_real_,
+        status = "ok",
+        error = NA_character_,
+        stringsAsFactors = FALSE
+      ),
+      as.data.frame(as.list(metric_vals), stringsAsFactors = FALSE)
+    )
+  }
+
+  raw <- rbind(
+    make_row("volregger", tsnr_ratio = 3.5, fidelity_loss = 0.15, edge_error = 0.06, disp_p95 = 1.0),
+    make_row("afni_3dvolreg", tsnr_ratio = 3.7, fidelity_loss = 0.30, edge_error = 0.10, disp_p95 = 2.0)
+  )
+  ctx <- env$make_tsnr_context(raw)
+
+  expect_true(ctx$tsnr_loss)
+  expect_true(ctx$truth_fidelity_win)
+  expect_true(ctx$edge_win)
+  expect_true(ctx$displacement_win)
+  expect_equal(ctx$tsnr_delta, -0.2)
+  expect_equal(ctx$fidelity_loss_margin, 0.15)
+})
+
 test_that("interpolation guardrail summary reports deltas from baseline", {
   env <- new.env(parent = globalenv())
   source(testthat::test_path("..", "..", "inst", "benchmarks", "realdata_benchmark_lib.R"), local = env)
