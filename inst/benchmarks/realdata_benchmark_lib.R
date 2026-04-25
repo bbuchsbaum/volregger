@@ -855,6 +855,57 @@ summarize_benchmark_scorecard <- function(scorecard, claim_only = FALSE) {
   )
 }
 
+summarize_interpolation_guardrail <- function(raw, baseline_interp = "lanczos") {
+  required <- c("interp", "scenario", "dataset_mode", "method", "status")
+  missing <- setdiff(required, names(raw))
+  if (length(missing)) {
+    stop("raw is missing required columns: ", paste(missing, collapse = ", "), call. = FALSE)
+  }
+  metrics <- c(
+    "elapsed_sec",
+    "estimate_sec",
+    "apply_sec",
+    "disp_p95",
+    "fd_error",
+    "fd_corr_to_truth",
+    "pose_jitter_error",
+    "nrmse_to_truth",
+    "edge_error_to_truth",
+    "highfreq_residual_ratio",
+    "truth_image_fidelity_loss",
+    "tsnr_ratio",
+    "blur_proxy_ratio"
+  )
+  metrics <- intersect(metrics, names(raw))
+  rows <- raw[
+    raw$method == "volregger" &
+      raw$status == "ok" &
+      raw$dataset_mode == "truth_injected",
+    c("interp", "scenario", "dataset_mode", metrics),
+    drop = FALSE
+  ]
+  if (!nrow(rows)) {
+    return(data.frame())
+  }
+
+  out <- rows
+  for (metric in metrics) {
+    out[[paste0(metric, "_vs_", baseline_interp)]] <- NA_real_
+  }
+
+  for (scenario_name in unique(rows$scenario)) {
+    base <- rows[rows$scenario == scenario_name & rows$interp == baseline_interp, , drop = FALSE]
+    if (nrow(base) != 1L) {
+      next
+    }
+    idx <- which(out$scenario == scenario_name)
+    for (metric in metrics) {
+      out[idx, paste0(metric, "_vs_", baseline_interp)] <- out[idx, metric] - base[[metric]]
+    }
+  }
+  out
+}
+
 compute_benchmark_metrics <- function(input_run, corrected, mask, motion_mats, truth = NULL, clean = NULL) {
   fd <- fd_from_transform(motion_mats)
   dvars_before <- dvars(input_run, robust = FALSE)

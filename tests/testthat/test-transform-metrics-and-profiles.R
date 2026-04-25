@@ -350,6 +350,32 @@ test_that("real-data benchmark scorecard ranks truth metrics by direction", {
   expect_equal(sum(claim_summary$losses), 0)
 })
 
+test_that("interpolation guardrail summary reports deltas from baseline", {
+  env <- new.env(parent = globalenv())
+  source(testthat::test_path("..", "..", "inst", "benchmarks", "realdata_benchmark_lib.R"), local = env)
+
+  raw <- data.frame(
+    interp = c("lanczos", "linear", "lanczos", "linear"),
+    scenario = rep(c("low_motion", "hard_motion_plus_nuisance"), each = 2),
+    dataset_mode = "truth_injected",
+    method = "volregger",
+    status = "ok",
+    elapsed_sec = c(2.0, 1.0, 3.0, 1.5),
+    apply_sec = c(0.8, 0.4, 1.2, 0.6),
+    disp_p95 = c(0.9, 1.1, 3.0, 3.4),
+    truth_image_fidelity_loss = c(0.15, 0.25, 0.5, 0.8),
+    stringsAsFactors = FALSE
+  )
+
+  summary <- env$summarize_interpolation_guardrail(raw, baseline_interp = "lanczos")
+
+  low_linear <- summary[summary$scenario == "low_motion" & summary$interp == "linear", ]
+  expect_equal(low_linear$apply_sec_vs_lanczos, -0.4)
+  expect_equal(low_linear$disp_p95_vs_lanczos, 0.2)
+  expect_equal(low_linear$truth_image_fidelity_loss_vs_lanczos, 0.1)
+  expect_true(file.exists(testthat::test_path("..", "..", "inst", "benchmarks", "benchmark_interpolation_guardrail.R")))
+})
+
 test_that("real-data benchmark claim summary spans multiple truth scenarios", {
   env <- new.env(parent = globalenv())
   source(testthat::test_path("..", "..", "inst", "benchmarks", "realdata_benchmark_lib.R"), local = env)
