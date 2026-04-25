@@ -127,15 +127,19 @@ test_that("fast_fmri profile adds fMRI-specific edge and template safeguards", {
   expect_true(isTRUE(prof$control$template_refresh_valid_only))
 })
 
-test_that("dense-polish profile keeps IC setup and enables bounded dense polish", {
+test_that("IC-polish profile keeps IC setup and enables bounded analytic polish", {
   prof <- volreg_profile("ic_nuisance_polish")
 
   expect_s3_class(prof, "volreg_profile")
-  expect_true(all(c("ic_stencil", "whiten", "nuisance", "dense_polish") %in% prof$components))
+  expect_true(all(c("ic_stencil", "whiten", "nuisance", "adaptive_huber", "ic_polish") %in% prof$components))
   expect_true(isTRUE(prof$control$use_ic_stencil))
-  expect_true(isTRUE(prof$control$use_dense_polish))
-  expect_equal(prof$control$polish_iter, 5L)
-  expect_equal(prof$control$polish_n_samples, 12000L)
+  expect_true(isTRUE(prof$control$adaptive_huber))
+  expect_equal(prof$control$huber_k, 0.15)
+  expect_equal(prof$control$max_iter, 12L)
+  expect_true(isTRUE(prof$control$use_ic_polish))
+  expect_false(isTRUE(prof$control$use_dense_polish))
+  expect_equal(prof$control$polish_iter, 3L)
+  expect_equal(prof$control$polish_n_samples, 2000L)
 })
 
 test_that("adaptive-Huber profile keeps IC setup and scales robust threshold", {

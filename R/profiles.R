@@ -177,7 +177,7 @@ volreg_profile <- function(
     ),
     ic_nuisance_polish = list(
       engine = "rigid_robust",
-      components = c("capture_boost", "ic_stencil", "whiten", "nuisance", "dense_polish"),
+      components = c("capture_boost", "ic_stencil", "whiten", "nuisance", "adaptive_huber", "huber_0.15", "iter_12", "ic_polish"),
       control = list(
         use_ic_stencil = TRUE,
         whiten_modes = TRUE,
@@ -185,9 +185,13 @@ volreg_profile <- function(
         nuisance_include_template = FALSE,
         nuisance_orthogonalize = TRUE,
         nuisance_ridge = 1e-4,
-        use_dense_polish = TRUE,
-        polish_iter = 5L,
-        polish_n_samples = 12000L
+        adaptive_huber = TRUE,
+        template_refresh_valid_only = TRUE,
+        huber_k = 0.15,
+        max_iter = 12L,
+        use_ic_polish = TRUE,
+        polish_iter = 3L,
+        polish_n_samples = 2000L
       )
     ),
     ic_nuisance_full = list(

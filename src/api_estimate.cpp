@@ -2522,6 +2522,10 @@ List cpp_volreg_estimate(
   if (control.containsElementNamed("use_dense_polish")) {
     use_dense_polish = as<bool>(control["use_dense_polish"]);
   }
+  bool use_ic_polish = false;
+  if (control.containsElementNamed("use_ic_polish")) {
+    use_ic_polish = as<bool>(control["use_ic_polish"]);
+  }
   int polish_iter = get_int_ctrl(control, "polish_iter", 5);
   int polish_n_samples = get_int_ctrl(control, "polish_n_samples", 0);
   bool parallel_frames = false;
@@ -2612,10 +2616,14 @@ List cpp_volreg_estimate(
       std::vector<int> samples;
       std::vector<int> polish_samples;
       std::vector<StencilPoint> stencil;
+      std::vector<StencilPoint> polish_stencil;
       bool use_ic;
       bool use_whiten;
+      bool polish_use_whiten;
       int nuisance_dim;
+      int polish_nuisance_dim;
       WhitenMetric wm;
+      WhitenMetric polish_wm;
     };
 
     std::vector<LevelContext> levels;
@@ -2635,11 +2643,17 @@ List cpp_volreg_estimate(
       }
       level.use_ic = false;
       level.use_whiten = false;
+      level.polish_use_whiten = false;
       level.nuisance_dim = 0;
+      level.polish_nuisance_dim = 0;
       level.wm.ok = false;
+      level.polish_wm.ok = false;
       set_identity6(level.wm.L);
       set_identity6(level.wm.Linv);
       set_identity6(level.wm.LinvT);
+      set_identity6(level.polish_wm.L);
+      set_identity6(level.polish_wm.Linv);
+      set_identity6(level.polish_wm.LinvT);
 
       if (use_dense_polish && polish_iter > 0 && li + 1 == downsample_levels.size()) {
         int polish_target = polish_n_samples > 0 ? polish_n_samples : level_n_samples;
@@ -2686,6 +2700,46 @@ List cpp_volreg_estimate(
                                                         nuisance_orthogonalize,
                                                         level.use_whiten,
                                                         nuisance_orth_reg);
+          }
+        }
+      }
+      if (use_ic_polish && polish_iter > 0 && li + 1 == downsample_levels.size()) {
+        int polish_target = polish_n_samples > 0 ? polish_n_samples : std::max(stencil_n * 2, stencil_n);
+        level.polish_stencil = build_ic_stencil(template_vol,
+                                                data,
+                                                nx,
+                                                ny,
+                                                nz,
+                                                nt,
+                                                nxyz,
+                                                pixdim,
+                                                level_mask,
+                                                polish_target,
+                                                stencil_bx,
+                                                stencil_by,
+                                                stencil_bz,
+                                                stencil_gamma);
+        if (!level.polish_stencil.empty()) {
+          if (whiten_modes) {
+            level.polish_wm = build_whiten_metric(level.polish_stencil, whiten_reg);
+            if (level.polish_wm.ok) {
+              apply_whiten_metric_to_stencil(&level.polish_stencil, level.polish_wm);
+              level.polish_use_whiten = true;
+            } else {
+              copy_raw_jacobian_to_whitened(&level.polish_stencil);
+            }
+          } else {
+            copy_raw_jacobian_to_whitened(&level.polish_stencil);
+          }
+          if (use_nuisance_marginalization) {
+            level.polish_nuisance_dim = prepare_nuisance_basis(&level.polish_stencil,
+                                                               nx,
+                                                               ny,
+                                                               nz,
+                                                               nuisance_include_template,
+                                                               nuisance_orthogonalize,
+                                                               level.polish_use_whiten,
+                                                               nuisance_orth_reg);
           }
         }
       }
@@ -2765,6 +2819,90 @@ List cpp_volreg_estimate(
             fit_ic = fit_fixed;
           } else {
             fit_ic.cost_final = c_adaptive;
+          }
+        }
+        if (final_level && use_ic_polish && polish_iter > 0 && !level.polish_stencil.empty()) {
+          auto run_ic_polish = [&](bool use_adaptive) {
+            return optimize_frame_pose_ic(data,
+                                          nx,
+                                          ny,
+                                          nz,
+                                          nxyz,
+                                          frame_t,
+                                          pixdim,
+                                          level.polish_stencil,
+                                          fit_ic.pose,
+                                          polish_iter,
+                                          lambda0,
+                                          tol_step,
+                                          tol_cost,
+                                          huber_k,
+                                          use_adaptive,
+                                          0,
+                                          use_overlap_taper,
+                                          false,
+                                          capture_trans_mm,
+                                          capture_rot_deg,
+                                          0,
+                                          level.polish_use_whiten,
+                                          level.polish_use_whiten ? level.polish_wm.LinvT : nullptr,
+                                          use_nuisance_marginalization,
+                                          level.polish_nuisance_dim,
+                                          nuisance_ridge,
+                                          fit_nthreads);
+          };
+          auto polish_fixed_objective = [&](const Pose6& pose) {
+            if (use_nuisance_marginalization && level.polish_nuisance_dim > 0) {
+              return evaluate_cost_stencil_nuisance(data,
+                                                    nx,
+                                                    ny,
+                                                    nz,
+                                                    nxyz,
+                                                    frame_t,
+                                                    pixdim,
+                                                    level.polish_stencil,
+                                                    pose,
+                                                    huber_k,
+                                                    use_overlap_taper,
+                                                    level.polish_nuisance_dim,
+                                                    nuisance_ridge,
+                                                    fit_nthreads)
+                  .cost;
+            }
+            return evaluate_cost_stencil(data,
+                                         nx,
+                                         ny,
+                                         nz,
+                                         nxyz,
+                                         frame_t,
+                                         pixdim,
+                                         level.polish_stencil,
+                                         pose,
+                                         huber_k,
+                                         use_overlap_taper,
+                                         fit_nthreads)
+                .cost;
+          };
+          FrameFit fit_polish = run_ic_polish(adaptive_huber);
+          if (adaptive_huber && adaptive_huber_guard) {
+            FrameFit fit_fixed = run_ic_polish(false);
+            double c_adaptive = polish_fixed_objective(fit_polish.pose);
+            double c_fixed = polish_fixed_objective(fit_fixed.pose);
+            if (c_fixed <= c_adaptive) {
+              fit_polish = fit_fixed;
+            } else {
+              fit_polish.cost_final = c_adaptive;
+            }
+          }
+          double c_polish_init = polish_fixed_objective(fit_ic.pose);
+          double c_polish_final = polish_fixed_objective(fit_polish.pose);
+          double c_primary_init = fixed_objective(fit_ic.pose);
+          double c_primary_final = fixed_objective(fit_polish.pose);
+          if (c_polish_final <= c_polish_init && c_primary_final <= c_primary_init) {
+            fit_polish.restart_used = fit_ic.restart_used;
+            fit_polish.iters += fit_ic.iters;
+            fit_polish.flags |= fit_ic.flags;
+            return fit_polish;
           }
         }
         if (final_level && use_dense_polish && polish_iter > 0 && !level.polish_samples.empty()) {

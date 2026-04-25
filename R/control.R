@@ -30,6 +30,7 @@ volreg_control <- function() {
     stencil_by = 4L,
     stencil_bz = 2L,
     stencil_gamma = 0.5,
+    use_ic_polish = FALSE,
     use_dense_polish = FALSE,
     polish_iter = 5L,
     polish_n_samples = 0L,
