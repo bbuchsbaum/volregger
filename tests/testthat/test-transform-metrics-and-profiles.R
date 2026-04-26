@@ -193,6 +193,42 @@ test_that("temporal-prior profile enables optimizer-level normal-equation prior"
   expect_true(isTRUE(prof$control$parallel_frames))
 })
 
+test_that("low-motion tSNR profile enables guarded pose shrink", {
+  prof <- volreg_profile("ic_nuisance_low_motion_tsnr")
+
+  expect_s3_class(prof, "volreg_profile")
+  expect_true("low_motion_pose_shrink" %in% prof$components)
+  expect_true("low_motion_pose_smooth" %in% prof$components)
+  expect_true("low_motion_output_smooth" %in% prof$components)
+  expect_true(isTRUE(prof$control$use_low_motion_pose_smooth))
+  expect_true(isTRUE(prof$control$use_low_motion_pose_shrink))
+  expect_true(isTRUE(prof$control$use_low_motion_output_smooth))
+  expect_equal(prof$control$low_motion_pose_scale, 0.97)
+  expect_equal(prof$control$low_motion_pose_smooth_alpha, 0.3)
+  expect_equal(prof$control$low_motion_output_smooth_alpha, 0.02)
+  expect_equal(prof$control$low_motion_fd_p95_max, 0.8)
+  expect_equal(prof$control$interp_final, "heptic")
+})
+
+test_that("low-motion pose shrink only applies below FD threshold", {
+  low <- matrix(0, nrow = 4, ncol = 6)
+  low[, 1] <- c(0, 0.1, 0.2, 0.3)
+  ctl <- utils::modifyList(volreg_control(), list(
+    use_low_motion_pose_shrink = TRUE,
+    low_motion_pose_scale = 0.5,
+    low_motion_fd_p95_max = 1
+  ))
+  shrunk <- volregger:::.apply_low_motion_pose_shrink(low, ctl)
+  expect_true(isTRUE(shrunk$applied))
+  expect_equal(shrunk$par, low * 0.5)
+
+  high <- low
+  high[, 1] <- c(0, 2, 4, 6)
+  kept <- volregger:::.apply_low_motion_pose_shrink(high, ctl)
+  expect_false(isTRUE(kept$applied))
+  expect_equal(kept$par, high)
+})
+
 test_that("adaptive-Huber profile keeps IC setup and scales robust threshold", {
   prof <- volreg_profile("ic_nuisance_adaptive")
 
@@ -585,6 +621,31 @@ test_that("interpolation guardrail summary reports deltas from baseline", {
   expect_equal(low_linear$disp_p95_vs_lanczos, 0.2)
   expect_equal(low_linear$truth_image_fidelity_loss_vs_lanczos, 0.1)
   expect_true(file.exists(testthat::test_path("..", "..", "inst", "benchmarks", "benchmark_interpolation_guardrail.R")))
+})
+
+test_that("resampler-swap summary reports deltas from method baselines", {
+  env <- new.env(parent = globalenv())
+  source(testthat::test_path("..", "..", "inst", "benchmarks", "realdata_benchmark_lib.R"), local = env)
+
+  raw <- data.frame(
+    method = c("volregger", "afni_3dvolreg", "afni_3dvolreg_x_volreg_resampler"),
+    method_model = c("v", "a", "swap"),
+    scenario = "low_motion",
+    dataset_mode = "truth_injected",
+    status = "ok",
+    tsnr_ratio = c(3.5, 3.7, 3.6),
+    truth_image_fidelity_loss = c(0.20, 0.30, 0.25),
+    disp_p95 = c(1, 2, 2),
+    stringsAsFactors = FALSE
+  )
+
+  summary <- env$summarize_resampler_swap(raw)
+  swap <- summary[summary$method == "afni_3dvolreg_x_volreg_resampler", ]
+
+  expect_equal(swap$tsnr_ratio_vs_volregger, 0.1)
+  expect_equal(swap$tsnr_ratio_vs_afni_3dvolreg, -0.1)
+  expect_equal(swap$truth_image_fidelity_loss_vs_volregger, 0.05)
+  expect_true(file.exists(testthat::test_path("..", "..", "inst", "benchmarks", "benchmark_resampler_swap.R")))
 })
 
 test_that("real-data benchmark claim summary spans multiple truth scenarios", {

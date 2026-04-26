@@ -260,6 +260,7 @@ run_one <- function(method, scenario_name) {
     actual_iter <- opts$volreg_max_iter %||% "default"
     actual_edge <- opts$volreg_edge_exclude_frac %||% 0
     actual_temporal_prior <- opts$volreg_temporal_prior_weight %||% "default"
+    actual_pose_scale <- "default"
     if (!is.null(run_meta)) {
       if ("huber_k" %in% names(run_meta) && is.finite(run_meta$huber_k[1])) {
         actual_huber <- run_meta$huber_k[1]
@@ -272,6 +273,9 @@ run_one <- function(method, scenario_name) {
       }
       if ("temporal_normal_prior_weight" %in% names(run_meta) && is.finite(run_meta$temporal_normal_prior_weight[1])) {
         actual_temporal_prior <- run_meta$temporal_normal_prior_weight[1]
+      }
+      if ("pose_scale_applied" %in% names(run_meta) && is.finite(run_meta$pose_scale_applied[1])) {
+        actual_pose_scale <- run_meta$pose_scale_applied[1]
       }
     }
     meta <- data.frame(
@@ -286,6 +290,7 @@ run_one <- function(method, scenario_name) {
         paste0("iter", actual_iter),
         paste0("edge", actual_edge),
         paste0("tprior", actual_temporal_prior),
+        paste0("posescale", actual_pose_scale),
         paste0("threads", nthreads),
         sep = ":"
       ),

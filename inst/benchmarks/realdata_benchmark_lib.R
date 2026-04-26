@@ -1253,6 +1253,54 @@ summarize_interpolation_guardrail <- function(raw, baseline_interp = "lanczos") 
   out
 }
 
+summarize_resampler_swap <- function(raw, baseline_methods = c("volregger", "afni_3dvolreg")) {
+  required <- c("method", "scenario", "dataset_mode", "status")
+  missing <- setdiff(required, names(raw))
+  if (length(missing)) {
+    stop("raw is missing required columns: ", paste(missing, collapse = ", "), call. = FALSE)
+  }
+  metrics <- c(
+    "tsnr_ratio",
+    "truth_image_fidelity_loss",
+    "nrmse_to_truth",
+    "edge_error_to_truth",
+    "blur_proxy_ratio",
+    "disp_p95",
+    "fd_error",
+    "fd_corr_to_truth",
+    "pose_jitter_error",
+    "elapsed_sec",
+    "apply_sec"
+  )
+  metrics <- intersect(metrics, names(raw))
+  out <- raw[
+    raw$status == "ok",
+    c("method", "method_model", "scenario", "dataset_mode", metrics),
+    drop = FALSE
+  ]
+  if (!nrow(out)) {
+    return(out)
+  }
+
+  for (baseline_method in baseline_methods) {
+    suffix <- paste0("_vs_", baseline_method)
+    for (metric in metrics) {
+      out[[paste0(metric, suffix)]] <- NA_real_
+    }
+    for (scenario_name in unique(out$scenario)) {
+      base <- out[out$scenario == scenario_name & out$method == baseline_method, , drop = FALSE]
+      if (nrow(base) != 1L) {
+        next
+      }
+      idx <- out$scenario == scenario_name
+      for (metric in metrics) {
+        out[idx, paste0(metric, suffix)] <- out[idx, metric] - base[[metric]]
+      }
+    }
+  }
+  out
+}
+
 compute_benchmark_metrics <- function(input_run, corrected, mask, motion_mats, truth = NULL, clean = NULL) {
   fd <- fd_from_transform(motion_mats)
   dvars_before <- dvars(input_run, robust = FALSE)

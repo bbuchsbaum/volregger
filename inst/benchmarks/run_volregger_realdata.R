@@ -91,6 +91,13 @@ estimate_timing <- time_expr(
   )
 )
 est <- estimate_timing$value
+shrink <- getFromNamespace(".apply_low_motion_pose_shrink", "volregger")(est$par, profile$control, est$mats)
+if (isTRUE(shrink$applied)) {
+  est$par <- shrink$par
+  est$mats <- shrink$mats
+}
+est$pose_scale_applied <- shrink$scale_applied
+est$pose_scale_fd_p95 <- shrink$fd_p95
 
 pose_spline <- NULL
 par_apply <- est$par
@@ -109,8 +116,8 @@ if (identical(profile$engine, "rigid_spline")) {
   estimate_timing$elapsed_sec <- estimate_timing$elapsed_sec + spline_timing$elapsed_sec
 }
 
-apply_timing <- time_expr(
-  apply_motion(
+apply_timing <- time_expr({
+  corrected <- apply_motion(
     x = x,
     motion = par_apply,
     interp = interp_final,
@@ -120,7 +127,8 @@ apply_timing <- time_expr(
     mb_groups = if (identical(profile$engine, "rigid_spline")) NULL else NULL,
     nthreads = nthreads
   )
-)
+  getFromNamespace(".apply_low_motion_output_smooth", "volregger")(corrected, profile$control, est$pose_scale_fd_p95)
+})
 corrected <- apply_timing$value
 
 mats <- motion_matrices(est$mats)
@@ -193,6 +201,9 @@ write.csv(
     edge_exclude_frac = benchmark_scalar_last(profile$control$edge_exclude_frac, 0),
     temporal_normal_prior_weight = benchmark_scalar_last(profile$control$temporal_normal_prior_weight, 0),
     temporal_normal_prior_rot_radius = benchmark_scalar_last(profile$control$temporal_normal_prior_rot_radius, NA_real_),
+    pose_scale_applied = est$pose_scale_applied %||% 1,
+    pose_scale_fd_p95 = est$pose_scale_fd_p95 %||% NA_real_,
+    output_smooth_alpha = attr(corrected, "output_smooth_alpha", exact = TRUE) %||% 0,
     nthreads = nthreads,
     components = paste(profile$components, collapse = "+"),
     with_report = isTRUE(opts$with_report),
