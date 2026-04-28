@@ -20,6 +20,10 @@
 #'   with an explicit `control` list for fully manual settings.
 #' @param verbose Verbose logging.
 #' @return A `volregger_fit` object.
+#' @examples
+#' x <- volregger_example()
+#' fit <- volreg(x, profile = "fast_native", qc = FALSE, resample = FALSE)
+#' head(fit$motion)
 #' @export
 volreg <- function(
     x,
@@ -48,8 +52,9 @@ volreg <- function(
   if (is.null(profile) && control_missing) {
     profile <- "fast_fmri"
   }
-  prof <- .apply_volreg_profile(control, profile)
+  prof <- .apply_volreg_profile(control, profile, control_user = !control_missing)
   control <- prof$control
+  volreg_validate_control(control, strict = TRUE)
   valid_interp_final <- c("bspline", "lanczos", "lanczos5", "lanczos7", "quintic", "heptic", "linear")
   if (is.null(interp_final)) {
     interp_final <- control$interp_final %||% "bspline"
@@ -103,6 +108,8 @@ volreg <- function(
 
   corrected <- NULL
   output_smooth_alpha <- 0
+  output_spatial_smooth_alpha <- 0
+  output_spatial_smooth_quantile <- NA_real_
   if (isTRUE(resample)) {
     arr_corr <- cpp_volreg_apply(
       data = inp$data,
@@ -118,6 +125,9 @@ volreg <- function(
     )
     arr_corr <- .apply_low_motion_output_smooth(arr_corr, ctl, shrink$fd_p95)
     output_smooth_alpha <- attr(arr_corr, "output_smooth_alpha", exact = TRUE) %||% 0
+    arr_corr <- .apply_low_motion_spatial_smooth(arr_corr, ctl, shrink$fd_p95, mask = est$mask)
+    output_spatial_smooth_alpha <- attr(arr_corr, "output_spatial_smooth_alpha", exact = TRUE) %||% 0
+    output_spatial_smooth_quantile <- attr(arr_corr, "output_spatial_smooth_quantile", exact = TRUE) %||% NA_real_
     corrected <- .rebuild_like(x, arr_corr)
   }
 
@@ -148,6 +158,8 @@ volreg <- function(
       pose_scale_applied = est$pose_scale_applied,
       pose_scale_fd_p95 = est$pose_scale_fd_p95,
       output_smooth_alpha = output_smooth_alpha,
+      output_spatial_smooth_alpha = output_spatial_smooth_alpha,
+      output_spatial_smooth_quantile = output_spatial_smooth_quantile,
       control = ctl
     ),
     class = "volregger_fit"
@@ -182,7 +194,13 @@ volreg <- function(
   smooth_alpha <- as.numeric(control$low_motion_pose_smooth_alpha %||% 0)
   if (isTRUE(control$use_low_motion_pose_smooth) && is.finite(smooth_alpha) && smooth_alpha > 0) {
     smooth_alpha <- min(1, max(0, smooth_alpha))
-    pose <- .smooth_pose_neighbors(pose, smooth_alpha)
+    smooth_iter <- as.integer(control$low_motion_pose_smooth_iter %||% 1L)
+    if (length(smooth_iter) != 1L || is.na(smooth_iter) || smooth_iter < 1L) {
+      smooth_iter <- 1L
+    }
+    for (i in seq_len(smooth_iter)) {
+      pose <- .smooth_pose_neighbors(pose, smooth_alpha)
+    }
     out$par <- pose
     out$mats <- motion_matrices(pose)
     out$applied <- TRUE
@@ -232,6 +250,76 @@ volreg <- function(
   }
   attr(out, "output_smooth_alpha") <- alpha
   out
+}
+
+.apply_low_motion_spatial_smooth <- function(x, control, fd_p95, mask = NULL) {
+  alpha <- as.numeric(control$low_motion_spatial_smooth_alpha %||% 0)
+  q <- as.numeric(control$low_motion_spatial_smooth_quantile %||% 0.5)
+  fd_p95_max <- as.numeric(control$low_motion_fd_p95_max %||% 0)
+  if (!isTRUE(control$use_low_motion_spatial_smooth) ||
+      !is.finite(alpha) || alpha <= 0 ||
+      !is.finite(q) || q <= 0 ||
+      !is.finite(fd_p95) || !is.finite(fd_p95_max) || fd_p95 > fd_p95_max) {
+    attr(x, "output_spatial_smooth_alpha") <- 0
+    attr(x, "output_spatial_smooth_quantile") <- NA_real_
+    return(x)
+  }
+  alpha <- min(1, max(0, alpha))
+  q <- min(1, max(0, q))
+  nt <- dim(x)[4]
+  if (nt < 1L) {
+    attr(x, "output_spatial_smooth_alpha") <- 0
+    attr(x, "output_spatial_smooth_quantile") <- NA_real_
+    return(x)
+  }
+
+  mean_img <- apply(x, c(1L, 2L, 3L), mean)
+  nb_mean <- .six_neighbor_mean(mean_img)
+  grad <- abs(mean_img - nb_mean)
+  if (is.null(mask)) {
+    mask <- is.finite(mean_img) & abs(mean_img) > 1e-8
+  } else {
+    mask <- as.array(mask) > 0
+  }
+  finite_grad <- grad[mask & is.finite(grad)]
+  if (!length(finite_grad)) {
+    attr(x, "output_spatial_smooth_alpha") <- 0
+    attr(x, "output_spatial_smooth_quantile") <- NA_real_
+    return(x)
+  }
+  threshold <- unname(stats::quantile(finite_grad, probs = q, na.rm = TRUE))
+  gate <- mask & is.finite(grad) & grad <= threshold
+
+  out <- x
+  for (t in seq_len(nt)) {
+    frame <- x[, , , t]
+    nb <- .six_neighbor_mean(frame)
+    frame[gate] <- (1 - alpha) * frame[gate] + alpha * nb[gate]
+    out[, , , t] <- frame
+  }
+  attr(out, "output_spatial_smooth_alpha") <- alpha
+  attr(out, "output_spatial_smooth_quantile") <- q
+  out
+}
+
+.six_neighbor_mean <- function(v) {
+  nx <- dim(v)[1]
+  ny <- dim(v)[2]
+  nz <- dim(v)[3]
+  sxm <- sxp <- sym <- syp <- szm <- szp <- v
+  if (nx > 1L) {
+    sxm[-1, , ] <- v[-nx, , ]
+    sxp[-nx, , ] <- v[-1, , ]
+  }
+  if (ny > 1L) {
+    sym[, -1, ] <- v[, -ny, ]
+    syp[, -ny, ] <- v[, -1, ]
+  }
+  if (nz > 1L) {
+    szm[, , -1] <- v[, , -nz]
+    szp[, , -nz] <- v[, , -1]
+  }
+  (sxm + sxp + sym + syp + szm + szp) / 6
 }
 
 .framewise_disp_from_mats <- function(mats, radius = 50) {

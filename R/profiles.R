@@ -5,6 +5,10 @@
 #' @param overrides Named list of control overrides applied last.
 #' @return A `volreg_profile` object with fields `name`, `engine`,
 #'   `components`, and `control`.
+#' @examples
+#' prof <- volreg_profile("fast_fmri")
+#' prof$engine
+#' head(names(prof$control))
 #' @export
 volreg_profile <- function(
     name = c(
@@ -25,6 +29,7 @@ volreg_profile <- function(
       "ic_nuisance_se3",
       "ic_nuisance_temporal_prior",
       "ic_nuisance_low_motion_tsnr",
+      "ic_nuisance_low_motion_full",
       "ic_nuisance_full",
       "slice_spline"
     ),
@@ -32,7 +37,28 @@ volreg_profile <- function(
     overrides = list()) {
   name <- match.arg(name)
 
-  spec <- switch(
+  spec <- .volreg_profile_spec(name)
+  ctl <- utils::modifyList(control, spec$control)
+  if (length(overrides) > 0L) {
+    ctl <- utils::modifyList(ctl, overrides)
+  }
+
+  structure(
+    list(
+      name = name,
+      engine = spec$engine,
+      components = spec$components,
+      control = ctl
+    ),
+    class = "volreg_profile"
+  )
+}
+
+# Raw profile spec (engine + components + the control fields the profile sets).
+# Used both by volreg_profile() and by .warn_profile_overrides() to detect
+# user/profile control conflicts without re-merging.
+.volreg_profile_spec <- function(name) {
+  switch(
     name,
     dense_baseline = list(
       engine = "rigid_robust",
@@ -304,11 +330,41 @@ volreg_profile <- function(
         interp_final = "heptic",
         use_low_motion_pose_smooth = TRUE,
         low_motion_pose_smooth_alpha = 0.3,
+        low_motion_pose_smooth_iter = 1L,
         use_low_motion_pose_shrink = TRUE,
         low_motion_pose_scale = 0.97,
         low_motion_fd_p95_max = 0.8,
         use_low_motion_output_smooth = TRUE,
         low_motion_output_smooth_alpha = 0.02
+      )
+    ),
+    ic_nuisance_low_motion_full = list(
+      engine = "rigid_robust",
+      components = c("capture_boost", "ic_stencil", "whiten", "nuisance", "adaptive_huber", "huber_0.15", "iter_12", "parallel_frames", "heptic_final", "low_motion_pose_smooth_iter", "low_motion_pose_shrink", "low_motion_output_smooth", "low_motion_spatial_smooth"),
+      control = list(
+        use_ic_stencil = TRUE,
+        whiten_modes = TRUE,
+        use_nuisance_marginalization = TRUE,
+        nuisance_include_template = FALSE,
+        nuisance_orthogonalize = TRUE,
+        nuisance_ridge = 1e-4,
+        adaptive_huber = TRUE,
+        template_refresh_valid_only = TRUE,
+        huber_k = 0.15,
+        max_iter = 12L,
+        parallel_frames = TRUE,
+        interp_final = "heptic",
+        use_low_motion_pose_smooth = TRUE,
+        low_motion_pose_smooth_alpha = 0.5,
+        low_motion_pose_smooth_iter = 15L,
+        use_low_motion_pose_shrink = TRUE,
+        low_motion_pose_scale = 0.95,
+        low_motion_fd_p95_max = 0.8,
+        use_low_motion_output_smooth = TRUE,
+        low_motion_output_smooth_alpha = 0.05,
+        use_low_motion_spatial_smooth = TRUE,
+        low_motion_spatial_smooth_alpha = 0.08,
+        low_motion_spatial_smooth_quantile = 0.5
       )
     ),
     ic_nuisance_full = list(
@@ -331,21 +387,6 @@ volreg_profile <- function(
       )
     )
   )
-
-  ctl <- utils::modifyList(control, spec$control)
-  if (length(overrides) > 0L) {
-    ctl <- utils::modifyList(ctl, overrides)
-  }
-
-  structure(
-    list(
-      name = name,
-      engine = spec$engine,
-      components = spec$components,
-      control = ctl
-    ),
-    class = "volreg_profile"
-  )
 }
 
 #' @export
@@ -357,9 +398,12 @@ print.volreg_profile <- function(x, ...) {
   invisible(x)
 }
 
-.apply_volreg_profile <- function(control, profile) {
+.apply_volreg_profile <- function(control, profile, control_user = FALSE) {
   if (is.null(profile) || identical(profile, FALSE) || identical(profile, "none")) {
     return(list(control = control, engine = NULL, name = NULL))
+  }
+  if (isTRUE(control_user) && !inherits(profile, "volreg_profile")) {
+    .warn_profile_overrides(control, as.character(profile))
   }
   prof <- if (inherits(profile, "volreg_profile")) {
     profile
@@ -368,4 +412,36 @@ print.volreg_profile <- function(x, ...) {
   }
   prof$control$profile <- prof$name
   list(control = prof$control, engine = prof$engine, name = prof$name)
+}
+
+# Emit a warning if the user's explicit `control` overrides fields that
+# `profile` is about to overwrite. Silenced via
+# `options(volregger.silent_profile = TRUE)`.
+.warn_profile_overrides <- function(control, profile_name) {
+  if (isTRUE(getOption("volregger.silent_profile", FALSE))) return(invisible())
+  defaults <- volreg_control()
+  spec <- tryCatch(.volreg_profile_spec(profile_name), error = function(e) NULL)
+  if (is.null(spec) || !length(spec$control)) return(invisible())
+
+  user_overrides <- vapply(intersect(names(control), names(defaults)), function(k) {
+    !identical(control[[k]], defaults[[k]])
+  }, logical(1L))
+  user_overrides <- names(user_overrides)[user_overrides]
+  if (!length(user_overrides)) return(invisible())
+
+  conflicts <- intersect(user_overrides, names(spec$control))
+  conflicts <- conflicts[vapply(conflicts, function(k) {
+    !identical(control[[k]], spec$control[[k]])
+  }, logical(1L))]
+  if (!length(conflicts)) return(invisible())
+
+  warning(
+    sprintf(
+      "profile '%s' overrides user-supplied control field(s): %s. Pass profile = NULL to keep your control as-is, or set options(volregger.silent_profile = TRUE) to suppress.",
+      profile_name,
+      paste(conflicts, collapse = ", ")
+    ),
+    call. = FALSE
+  )
+  invisible()
 }

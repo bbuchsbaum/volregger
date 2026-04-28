@@ -17,6 +17,13 @@ defaults <- list(
   edge_exclude_frac = NULL,
   temporal_prior_weight = NULL,
   temporal_prior_rot_radius = NULL,
+  low_motion_pose_smooth_alpha = NULL,
+  low_motion_pose_smooth_iter = NULL,
+  low_motion_pose_scale = NULL,
+  low_motion_output_smooth_alpha = NULL,
+  low_motion_spatial_smooth_alpha = NULL,
+  low_motion_spatial_smooth_quantile = NULL,
+  low_motion_fd_p95_max = NULL,
   nthreads = "4"
 )
 opts <- parse_benchmark_args(
@@ -63,6 +70,33 @@ if (!is.null(opts$temporal_prior_weight)) {
 }
 if (!is.null(opts$temporal_prior_rot_radius)) {
   profile_overrides$temporal_normal_prior_rot_radius <- as.numeric(opts$temporal_prior_rot_radius)
+}
+if (!is.null(opts$low_motion_pose_smooth_alpha)) {
+  profile_overrides$use_low_motion_pose_smooth <- TRUE
+  profile_overrides$low_motion_pose_smooth_alpha <- as.numeric(opts$low_motion_pose_smooth_alpha)
+}
+if (!is.null(opts$low_motion_pose_smooth_iter)) {
+  profile_overrides$use_low_motion_pose_smooth <- TRUE
+  profile_overrides$low_motion_pose_smooth_iter <- as.integer(opts$low_motion_pose_smooth_iter)
+}
+if (!is.null(opts$low_motion_pose_scale)) {
+  profile_overrides$use_low_motion_pose_shrink <- TRUE
+  profile_overrides$low_motion_pose_scale <- as.numeric(opts$low_motion_pose_scale)
+}
+if (!is.null(opts$low_motion_output_smooth_alpha)) {
+  profile_overrides$use_low_motion_output_smooth <- TRUE
+  profile_overrides$low_motion_output_smooth_alpha <- as.numeric(opts$low_motion_output_smooth_alpha)
+}
+if (!is.null(opts$low_motion_spatial_smooth_alpha)) {
+  profile_overrides$use_low_motion_spatial_smooth <- TRUE
+  profile_overrides$low_motion_spatial_smooth_alpha <- as.numeric(opts$low_motion_spatial_smooth_alpha)
+}
+if (!is.null(opts$low_motion_spatial_smooth_quantile)) {
+  profile_overrides$use_low_motion_spatial_smooth <- TRUE
+  profile_overrides$low_motion_spatial_smooth_quantile <- as.numeric(opts$low_motion_spatial_smooth_quantile)
+}
+if (!is.null(opts$low_motion_fd_p95_max)) {
+  profile_overrides$low_motion_fd_p95_max <- as.numeric(opts$low_motion_fd_p95_max)
 }
 profile <- volreg_profile(
   opts$profile,
@@ -127,7 +161,9 @@ apply_timing <- time_expr({
     mb_groups = if (identical(profile$engine, "rigid_spline")) NULL else NULL,
     nthreads = nthreads
   )
-  getFromNamespace(".apply_low_motion_output_smooth", "volregger")(corrected, profile$control, est$pose_scale_fd_p95)
+  corrected <- getFromNamespace(".apply_low_motion_output_smooth", "volregger")(corrected, profile$control, est$pose_scale_fd_p95)
+  corrected <- getFromNamespace(".apply_low_motion_spatial_smooth", "volregger")(corrected, profile$control, est$pose_scale_fd_p95, mask = mask)
+  corrected
 })
 corrected <- apply_timing$value
 
@@ -204,6 +240,8 @@ write.csv(
     pose_scale_applied = est$pose_scale_applied %||% 1,
     pose_scale_fd_p95 = est$pose_scale_fd_p95 %||% NA_real_,
     output_smooth_alpha = attr(corrected, "output_smooth_alpha", exact = TRUE) %||% 0,
+    output_spatial_smooth_alpha = attr(corrected, "output_spatial_smooth_alpha", exact = TRUE) %||% 0,
+    output_spatial_smooth_quantile = attr(corrected, "output_spatial_smooth_quantile", exact = TRUE) %||% NA_real_,
     nthreads = nthreads,
     components = paste(profile$components, collapse = "+"),
     with_report = isTRUE(opts$with_report),

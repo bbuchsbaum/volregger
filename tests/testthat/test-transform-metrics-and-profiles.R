@@ -210,6 +210,21 @@ test_that("low-motion tSNR profile enables guarded pose shrink", {
   expect_equal(prof$control$interp_final, "heptic")
 })
 
+test_that("full low-motion profile enables masked spatial stabilization", {
+  prof <- volreg_profile("ic_nuisance_low_motion_full")
+
+  expect_s3_class(prof, "volreg_profile")
+  expect_true("low_motion_pose_smooth_iter" %in% prof$components)
+  expect_true("low_motion_spatial_smooth" %in% prof$components)
+  expect_true(isTRUE(prof$control$use_low_motion_pose_smooth))
+  expect_true(isTRUE(prof$control$use_low_motion_spatial_smooth))
+  expect_equal(prof$control$low_motion_pose_smooth_alpha, 0.5)
+  expect_equal(prof$control$low_motion_pose_smooth_iter, 15L)
+  expect_equal(prof$control$low_motion_spatial_smooth_alpha, 0.08)
+  expect_equal(prof$control$low_motion_spatial_smooth_quantile, 0.5)
+  expect_equal(prof$control$interp_final, "heptic")
+})
+
 test_that("low-motion pose shrink only applies below FD threshold", {
   low <- matrix(0, nrow = 4, ncol = 6)
   low[, 1] <- c(0, 0.1, 0.2, 0.3)
