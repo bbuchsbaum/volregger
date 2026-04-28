@@ -1,8 +1,10 @@
 ---
 title: Getting Started with volregger
 output: rmarkdown::html_vignette
-vignette: '%\VignetteIndexEntry{Getting Started with volregger} %\VignetteEngine{knitr::rmarkdown}
-  %\VignetteEncoding{UTF-8}'
+vignette: >
+  %\VignetteIndexEntry{Getting Started with volregger}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
 params:
   family: violet
   preset: homage

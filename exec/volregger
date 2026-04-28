@@ -1,31 +1,51 @@
 #!/usr/bin/env Rscript
 
-args <- commandArgs(trailingOnly = TRUE)
-script_arg <- grep("^--file=", commandArgs(), value = TRUE)
-script_path <- if (length(script_arg)) {
-  sub("^--file=", "", script_arg[[1]])
-} else {
-  "exec/volregger"
-}
-repo_root <- normalizePath(file.path(dirname(script_path), ".."), mustWork = FALSE)
+# Thin wrapper. All parsing and dispatch live in volregger::volregger_cli().
+# When the package is installed, we call it directly. When invoked from a
+# source checkout (e.g. ./exec/volregger), we fall back to pkgload::load_all().
 
-status <- tryCatch(
-  {
+local({
+  args <- commandArgs(trailingOnly = TRUE)
+
+  resolve_cli <- function() {
     if (requireNamespace("volregger", quietly = TRUE)) {
-      volregger::volregger_cli(args)
-    } else if (requireNamespace("pkgload", quietly = TRUE) &&
-               file.exists(file.path(repo_root, "DESCRIPTION"))) {
-      pkgload::load_all(repo_root, export_all = FALSE, helpers = FALSE, quiet = TRUE)
-      volregger_cli(args)
-    } else {
-      message("volregger: package is not installed and pkgload is unavailable")
+      return(volregger::volregger_cli)
+    }
+
+    script_arg <- grep("^--file=", commandArgs(), value = TRUE)
+    if (!length(script_arg)) {
+      return(NULL)
+    }
+
+    script_path <- sub("^--file=", "", script_arg[[1L]])
+    repo_root <- normalizePath(file.path(dirname(script_path), ".."), mustWork = FALSE)
+    if (!file.exists(file.path(repo_root, "DESCRIPTION"))) {
+      return(NULL)
+    }
+    if (!requireNamespace("pkgload", quietly = TRUE)) {
+      message("volregger: pkgload is required to run from a source checkout")
+      return(NULL)
+    }
+
+    pkgload::load_all(repo_root, export_all = FALSE, helpers = FALSE, quiet = TRUE)
+    get("volregger_cli", envir = asNamespace("volregger"))
+  }
+
+  status <- tryCatch(
+    {
+      cli <- resolve_cli()
+      if (is.null(cli)) {
+        message("volregger: package is not installed and no source checkout was detected")
+        2L
+      } else {
+        cli(args)
+      }
+    },
+    error = function(e) {
+      message("volregger: ", conditionMessage(e))
       2L
     }
-  },
-  error = function(e) {
-    message("volregger: ", conditionMessage(e))
-    2L
-  }
-)
+  )
 
-quit(save = "no", status = as.integer(status))
+  quit(save = "no", status = as.integer(status))
+})
