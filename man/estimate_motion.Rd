@@ -13,6 +13,7 @@ estimate_motion(
   slice_times = NULL,
   mb_groups = NULL,
   control = volreg_control(),
+  profile = NULL,
   verbose = FALSE
 )
 }
@@ -33,6 +34,9 @@ estimate_motion(
 
 \item{control}{Control list.}
 
+\item{profile}{Optional named estimator profile. Bare \code{estimate_motion()}
+uses \code{"fast_fmri"} when \code{control} is not supplied.}
+
 \item{verbose}{Verbose logging.}
 }
 \value{
@@ -40,4 +44,9 @@ A list containing estimated motion and fit diagnostics.
 }
 \description{
 Estimate rigid motion parameters from a 4D run
+}
+\examples{
+x <- volregger_example()
+est <- estimate_motion(x, profile = "fast_native")
+dim(est$par)  # nt x 6
 }

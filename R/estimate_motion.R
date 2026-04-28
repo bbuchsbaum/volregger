@@ -12,6 +12,10 @@
 #'   uses `"fast_fmri"` when `control` is not supplied.
 #' @param verbose Verbose logging.
 #' @return A list containing estimated motion and fit diagnostics.
+#' @examples
+#' x <- volregger_example()
+#' est <- estimate_motion(x, profile = "fast_native")
+#' dim(est$par)  # nt x 6
 #' @export
 estimate_motion <- function(
     x,
@@ -30,8 +34,9 @@ estimate_motion <- function(
   if (is.null(profile) && control_missing) {
     profile <- "fast_fmri"
   }
-  prof <- .apply_volreg_profile(control, profile)
+  prof <- .apply_volreg_profile(control, profile, control_user = !control_missing)
   control <- prof$control
+  volreg_validate_control(control, strict = TRUE)
   if (!is.null(prof$engine) && engine_missing) {
     engine <- prof$engine
   }

@@ -17,3 +17,8 @@ Numeric vector of FD values.
 \description{
 Compute framewise displacement from motion parameters
 }
+\examples{
+motion <- matrix(0, nrow = 5, ncol = 6)
+motion[3, 1] <- 0.5  # 0.5 mm shift in x at frame 3
+framewise_disp(motion)
+}

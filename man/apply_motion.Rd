@@ -7,7 +7,7 @@
 apply_motion(
   x,
   motion,
-  interp = c("bspline", "lanczos", "linear"),
+  interp = c("bspline", "lanczos", "lanczos5", "lanczos7", "quintic", "heptic", "linear"),
   pad = c("clamp", "zero"),
   zpad = 0L,
   slice_times = NULL,
@@ -38,4 +38,10 @@ Corrected 4D array-like object.
 }
 \description{
 Apply motion parameters to a 4D run
+}
+\examples{
+x <- volregger_example()
+fit <- volreg(x, profile = "fast_native", qc = FALSE, resample = FALSE)
+corrected <- apply_motion(x, fit$motion, interp = "linear")
+dim(corrected)
 }

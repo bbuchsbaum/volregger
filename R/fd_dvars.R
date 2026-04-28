@@ -3,6 +3,10 @@
 #' @param motion nt x 6 motion matrix.
 #' @param radius Head radius in millimeters.
 #' @return Numeric vector of FD values.
+#' @examples
+#' motion <- matrix(0, nrow = 5, ncol = 6)
+#' motion[3, 1] <- 0.5  # 0.5 mm shift in x at frame 3
+#' framewise_disp(motion)
 #' @export
 framewise_disp <- function(motion, radius = 50) {
   motion <- .require_motion_matrix(motion)
@@ -27,6 +31,9 @@ framewise_disp <- function(motion, radius = 50) {
 #' @param mask Optional 3D mask.
 #' @param robust If TRUE, return robust DVARS estimate.
 #' @return Numeric vector of DVARS values.
+#' @examples
+#' x <- volregger_example()
+#' dvars(x)
 #' @export
 dvars <- function(x, mask = NULL, robust = TRUE) {
   arr <- as.array(x)

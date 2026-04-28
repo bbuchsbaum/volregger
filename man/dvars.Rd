@@ -19,3 +19,7 @@ Numeric vector of DVARS values.
 \description{
 Compute DVARS from a 4D run
 }
+\examples{
+x <- volregger_example()
+dvars(x)
+}

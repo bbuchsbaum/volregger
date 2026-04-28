@@ -10,6 +10,11 @@
 #' @param mb_groups Optional multiband group IDs.
 #' @param nthreads Number of threads.
 #' @return Corrected 4D array-like object.
+#' @examples
+#' x <- volregger_example()
+#' fit <- volreg(x, profile = "fast_native", qc = FALSE, resample = FALSE)
+#' corrected <- apply_motion(x, fit$motion, interp = "linear")
+#' dim(corrected)
 #' @export
 apply_motion <- function(
     x,

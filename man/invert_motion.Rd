@@ -17,3 +17,8 @@ A \verb{4 x 4 x nt} array containing the inverse transform for each frame.
 \description{
 Invert motion transforms
 }
+\examples{
+pose <- c(0.5, 0, 0, 0, 0, 0)
+inv <- invert_motion(pose)
+inv[, , 1]
+}

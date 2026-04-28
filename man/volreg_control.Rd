@@ -2,13 +2,353 @@
 % Please edit documentation in R/control.R
 \name{volreg_control}
 \alias{volreg_control}
-\title{Default control parameters for volregger}
+\title{Control parameters for the volregger optimizer}
 \usage{
-volreg_control()
+volreg_control(
+  downsample = c(4L, 2L, 1L),
+  use_pyramid = FALSE,
+  max_iter = c(30L, 20L, 12L),
+  n_samples = c(12000L, 24000L, 40000L),
+  huber_k = 1.5,
+  adaptive_huber = FALSE,
+  adaptive_huber_guard = FALSE,
+  lambda0 = 0.01,
+  tol_step = 1e-05,
+  tol_cost = 1e-06,
+  n_restarts = 0L,
+  robust_template = TRUE,
+  template_refresh_valid_only = TRUE,
+  use_overlap_taper = TRUE,
+  edge_exclude_frac = 0.05,
+  edge_exclude_vox = 0L,
+  capture_boost = TRUE,
+  capture_trans_mm = 8,
+  capture_rot_deg = 8,
+  capture_topk = 4L,
+  use_ic_stencil = TRUE,
+  stencil_n = 1000L,
+  stencil_bx = 4L,
+  stencil_by = 4L,
+  stencil_bz = 2L,
+  stencil_gamma = 0.5,
+  use_ic_polish = FALSE,
+  use_dense_polish = FALSE,
+  polish_iter = 5L,
+  polish_n_samples = 0L,
+  dense_interp = "linear",
+  dense_polish_interp = "linear",
+  use_temporal_regularization = FALSE,
+  temporal_regularization_iter = 1L,
+  temporal_regularization_alpha = 0.25,
+  temporal_regularization_cost_tol = 0.002,
+  temporal_regularization_fd_max = 0.8,
+  use_se3_updates = FALSE,
+  se3_update_order = "left",
+  use_temporal_normal_prior = FALSE,
+  temporal_normal_prior_weight = 0,
+  temporal_normal_prior_rot_radius = 50,
+  use_low_motion_pose_shrink = FALSE,
+  low_motion_pose_scale = 0.95,
+  low_motion_fd_p95_max = 0.8,
+  use_low_motion_pose_smooth = FALSE,
+  low_motion_pose_smooth_alpha = 0.3,
+  low_motion_pose_smooth_iter = 1L,
+  use_low_motion_output_smooth = FALSE,
+  low_motion_output_smooth_alpha = 0.02,
+  use_low_motion_spatial_smooth = FALSE,
+  low_motion_spatial_smooth_alpha = 0.08,
+  low_motion_spatial_smooth_quantile = 0.5,
+  parallel_frames = FALSE,
+  whiten_modes = TRUE,
+  whiten_reg = 1e-06,
+  use_nuisance_marginalization = FALSE,
+  nuisance_include_template = FALSE,
+  nuisance_orthogonalize = TRUE,
+  nuisance_ridge = 1e-04,
+  nuisance_orth_reg = 1e-06,
+  use_slice_spline = FALSE,
+  nthreads = 1L,
+  tr = 1,
+  engine = c("rigid_robust", "rigid_spline"),
+  verbose = FALSE
+)
+}
+\arguments{
+\item{downsample}{Integer vector of pyramid downsampling factors, finest
+level last. Each entry must be \verb{>= 1L}. Default \code{c(4L, 2L, 1L)}.}
+
+\item{use_pyramid}{Logical scalar. When \code{TRUE}, the optimizer iterates
+over the full \code{downsample} schedule; when \code{FALSE}, only the finest
+level is used. Default \code{FALSE}.}
+
+\item{max_iter}{Integer vector of maximum LM iterations per pyramid
+level. Length must equal \code{length(downsample)} when \code{use_pyramid = TRUE}. A scalar is broadcast. Default \code{c(30L, 20L, 12L)}.}
+
+\item{n_samples}{Integer vector of voxel-sample counts per pyramid level.
+Same length rule as \code{max_iter}. Default \code{c(12000L, 24000L, 40000L)}.}
+
+\item{huber_k}{Positive scalar. Huber-loss break point in robust-residual
+units; lower values down-weight outliers more aggressively. Default
+\code{1.5}.}
+
+\item{adaptive_huber}{Logical. If \code{TRUE}, \code{huber_k} is rescaled by the
+per-iteration robust residual sigma. Default \code{FALSE}.}
+
+\item{adaptive_huber_guard}{Logical. If \code{TRUE}, guards adaptive scaling
+from collapsing to zero on near-perfect frames. Default \code{FALSE}.}
+
+\item{lambda0}{Non-negative scalar. Initial Levenberg-Marquardt damping.
+Default \code{1e-2}.}
+
+\item{tol_step}{Non-negative scalar. Convergence threshold on the
+pose-step norm. Default \code{1e-5}.}
+
+\item{tol_cost}{Non-negative scalar. Convergence threshold on the
+relative cost decrease between iterations. Default \code{1e-6}.}
+
+\item{n_restarts}{Non-negative integer. Number of additional
+capture-boost restart seeds tried when the primary fit is poor.
+Default \code{0L}.}
+
+\item{robust_template}{Logical. If \code{TRUE}, the per-voxel template is a
+trimmed mean across frames; if \code{FALSE}, a plain mean. Default \code{TRUE}.}
+
+\item{template_refresh_valid_only}{Logical. If \code{TRUE}, the template
+refresh step only averages over frames whose fits passed validity
+checks. Default \code{TRUE}.}
+
+\item{use_overlap_taper}{Logical. If \code{TRUE}, the residual is tapered
+along the boundary of the voxel-overlap region between reference
+and warped frame. Default \code{TRUE}.}
+
+\item{edge_exclude_frac}{Scalar in \verb{[0, 1)}. Fraction of voxels at each
+edge to drop from the optimization mask. Default \code{0.05}.}
+
+\item{edge_exclude_vox}{Non-negative integer. Absolute number of edge
+voxels to drop in addition to \code{edge_exclude_frac}. Default \code{0L}.}
+
+\item{capture_boost}{Logical. If \code{TRUE}, seed each frame with a small
+grid of translation/rotation candidates and pick the best initialization
+before LM iteration. Default \code{TRUE}.}
+
+\item{capture_trans_mm}{Positive scalar. Half-width (mm) of the
+translation grid evaluated by capture boost. Default \code{8}.}
+
+\item{capture_rot_deg}{Positive scalar. Half-width (deg) of the rotation
+grid evaluated by capture boost. Default \code{8}.}
+
+\item{capture_topk}{Positive integer. Number of best-scoring grid
+seeds carried forward into LM iteration. Default \code{4L}.}
+
+\item{use_ic_stencil}{Logical. If \code{TRUE}, sample voxels through a
+structured information-content stencil rather than uniformly. Default
+\code{TRUE}.}
+
+\item{stencil_n}{Positive integer. Number of stencil sample points per
+frame. Default \code{1000L}.}
+
+\item{stencil_bx, stencil_by, stencil_bz}{Positive integers. Bin counts
+along each axis used to bucket voxels by information content.
+Defaults \code{4L}, \code{4L}, \code{2L}.}
+
+\item{stencil_gamma}{Positive scalar. Tempering exponent applied to
+per-bin importance weights. Default \code{0.5}.}
+
+\item{use_ic_polish}{Logical. If \code{TRUE}, run an extra IC-stencil polish
+pass after LM. Default \code{FALSE}.}
+
+\item{use_dense_polish}{Logical. If \code{TRUE}, run a dense (full-voxel)
+polish pass after LM. Default \code{FALSE}.}
+
+\item{polish_iter}{Non-negative integer. Iterations per polish pass.
+Default \code{5L}.}
+
+\item{polish_n_samples}{Non-negative integer. Voxel sample count for
+dense polish (\code{0L} lets the optimizer choose). Default \code{0L}.}
+
+\item{dense_interp, dense_polish_interp}{Strings. Interpolation methods
+used during dense sampling and polish, respectively. Must be one of
+\code{"linear"}, \code{"bspline"}, \code{"lanczos"}, \code{"lanczos5"}, \code{"lanczos7"},
+\code{"quintic"}, or \code{"heptic"}. Defaults \code{"linear"}, \code{"linear"}.}
+
+\item{use_temporal_regularization}{Logical. If \code{TRUE}, enable the
+temporal-smoothing pose update with cost-improvement guard.
+Default \code{FALSE}.}
+
+\item{temporal_regularization_iter}{Positive integer. Number of
+smoothing passes applied. Default \code{1L}.}
+
+\item{temporal_regularization_alpha}{Scalar in \verb{[0, 1]}. Mixing weight
+between original and neighbor-averaged pose. Default \code{0.25}.}
+
+\item{temporal_regularization_cost_tol}{Non-negative scalar. Maximum
+tolerated cost increase per smoothing pass. Default \code{0.002}.}
+
+\item{temporal_regularization_fd_max}{Positive scalar. FD threshold
+above which the smoothing guard kicks in. Default \code{0.8}.}
+
+\item{use_se3_updates}{Logical. If \code{TRUE}, apply pose updates in
+SE(3) (composition) rather than additive parameter space.
+Default \code{FALSE}.}
+
+\item{se3_update_order}{String, one of \code{"left"} or \code{"right"}. Side on
+which the SE(3) increment is composed. Default \code{"left"}.}
+
+\item{use_temporal_normal_prior}{Logical. If \code{TRUE}, add a Gaussian
+neighbor-pose prior to the cost. Default \code{FALSE}.}
+
+\item{temporal_normal_prior_weight}{Non-negative scalar. Prior weight.
+Default \code{0}.}
+
+\item{temporal_normal_prior_rot_radius}{Positive scalar. Equivalent
+radius (mm) used to scale rotation contributions to the prior.
+Default \code{50}.}
+
+\item{use_low_motion_pose_shrink}{Logical. If \code{TRUE}, shrink pose
+parameters toward zero on runs whose \code{fd_p95} is below
+\code{low_motion_fd_p95_max}. Default \code{FALSE}.}
+
+\item{low_motion_pose_scale}{Scalar in \verb{(0, 1]}. Multiplicative shrink
+factor. Default \code{0.95}.}
+
+\item{low_motion_fd_p95_max}{Non-negative scalar. FD-p95 ceiling for
+the low-motion regime. Default \code{0.8}.}
+
+\item{use_low_motion_pose_smooth}{Logical. If \code{TRUE}, neighbor-smooth
+the pose trace under the low-motion regime. Default \code{FALSE}.}
+
+\item{low_motion_pose_smooth_alpha}{Scalar in \verb{[0, 1]}. Smoothing
+weight. Default \code{0.3}.}
+
+\item{low_motion_pose_smooth_iter}{Positive integer. Number of
+neighbor-smoothing passes when low-motion pose smoothing is enabled.
+Default \code{1L}.}
+
+\item{use_low_motion_output_smooth}{Logical. If \code{TRUE}, neighbor-smooth
+the resampled output under the low-motion regime. Default \code{FALSE}.}
+
+\item{low_motion_output_smooth_alpha}{Scalar in \verb{[0, 1]}. Output-smooth
+weight. Default \code{0.02}.}
+
+\item{use_low_motion_spatial_smooth}{Logical. If \code{TRUE}, apply a
+low-gradient, edge-preserving spatial smooth to the resampled output
+under the low-motion regime. Default \code{FALSE}.}
+
+\item{low_motion_spatial_smooth_alpha}{Scalar in \verb{[0, 1]}. Spatial
+smoothing weight. Default \code{0.08}.}
+
+\item{low_motion_spatial_smooth_quantile}{Scalar in \verb{[0, 1]}. Quantile of
+mean-image local-gradient voxels eligible for spatial smoothing. Default
+\code{0.5}.}
+
+\item{parallel_frames}{Logical. If \code{TRUE}, fit independent frames in
+parallel using up to \code{nthreads} workers. Default \code{FALSE}.}
+
+\item{whiten_modes}{Logical. If \code{TRUE}, whiten residuals against the
+leading template modes. Default \code{TRUE}.}
+
+\item{whiten_reg}{Positive scalar. Ridge added to the whitening
+covariance for numerical stability. Default \code{1e-6}.}
+
+\item{use_nuisance_marginalization}{Logical. If \code{TRUE}, project a
+nuisance basis out of the residual at each iteration. Default
+\code{FALSE}.}
+
+\item{nuisance_include_template}{Logical. If \code{TRUE}, include template
+modes in the nuisance basis. Default \code{FALSE}.}
+
+\item{nuisance_orthogonalize}{Logical. If \code{TRUE}, orthogonalize the
+nuisance basis before regression. Default \code{TRUE}.}
+
+\item{nuisance_ridge}{Positive scalar. Ridge added to the nuisance
+normal equations. Default \code{1e-4}.}
+
+\item{nuisance_orth_reg}{Positive scalar. Ridge applied during
+orthogonalization. Default \code{1e-6}.}
+
+\item{use_slice_spline}{Logical. If \code{TRUE}, treat the run as
+slice/packet-timed and apply the spline-smoothed engine. Set
+automatically by \code{engine = "rigid_spline"}. Default \code{FALSE}.}
+
+\item{nthreads}{Positive integer. Worker thread count. Default \code{1L}.}
+
+\item{tr}{Positive scalar. Repetition time (s); set automatically from
+input metadata when available. Default \code{1}.}
+
+\item{engine}{String, one of \code{"rigid_robust"} or \code{"rigid_spline"}.
+Engine identifier. Default \code{"rigid_robust"}.}
+
+\item{verbose}{Logical. If \code{TRUE}, surface per-iteration diagnostics
+from the C++ core. Default \code{FALSE}.}
 }
 \value{
-A named list of control parameters.
+A named list of every control field shown above, in the order
+listed.
 }
 \description{
-Default control parameters for volregger
+Returns a list of all control fields used by \code{\link[=volreg]{volreg()}} and
+\code{\link[=estimate_motion]{estimate_motion()}}. Every field has a documented default below; pass
+overrides as named arguments (e.g. \code{volreg_control(huber_k = 0.05)})
+or via \code{utils::modifyList()}. Use \code{\link[=volreg_validate_control]{volreg_validate_control()}} to check
+that a custom list still satisfies the field-level invariants.
+}
+\section{Pyramid (coarse-to-fine)}{
+
+}
+
+\section{Optimization}{
+
+}
+
+\section{Coverage / mask}{
+
+}
+
+\section{Capture boost (initial pose seeding)}{
+
+}
+
+\section{IC stencil sampling}{
+
+}
+
+\section{Polish (post-LM refinement)}{
+
+}
+
+\section{Temporal regularization}{
+
+}
+
+\section{SE(3) updates}{
+
+}
+
+\section{Temporal normal prior}{
+
+}
+
+\section{Low-motion stabilization}{
+
+}
+
+\section{Whitening}{
+
+}
+
+\section{Nuisance marginalization}{
+
+}
+
+\section{Engine, threading, misc}{
+
+}
+
+\examples{
+ctl <- volreg_control(huber_k = 0.05, nthreads = 2L)
+ctl$huber_k
+}
+\seealso{
+\code{\link[=volreg_validate_control]{volreg_validate_control()}} for invariant checks; \code{\link[=volreg_profile]{volreg_profile()}}
+for named presets.
 }

@@ -24,3 +24,8 @@ inside \code{mask}.
 \description{
 Compute masked transform displacements
 }
+\examples{
+mask <- array(TRUE, dim = c(4, 4, 2))
+pose <- c(0.5, 0, 0, 0, 0, 0)
+summary(displacements_within_mask(mask, pose))
+}

@@ -31,3 +31,11 @@ A data frame with per-frame transform metrics:
 \description{
 Summarize brain-mask displacement against ground truth motion
 }
+\examples{
+mask <- array(TRUE, dim = c(4, 4, 2))
+truth <- matrix(c(0, 0, 0, 0, 0, 0,
+                  0.5, 0, 0, 0, 0, 0), ncol = 6, byrow = TRUE)
+est <- truth
+est[2, 1] <- 0.45
+motion_displacement_summary(mask, est, truth)
+}

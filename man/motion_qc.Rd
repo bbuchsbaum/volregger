@@ -32,3 +32,10 @@ A list of QC metrics.
 \description{
 Compute QC metrics for a motion estimate
 }
+\examples{
+x <- volregger_example()
+fit <- volreg(x, profile = "fast_native", qc = FALSE, resample = TRUE,
+              interp_final = "linear")
+qc <- motion_qc(x, fit$motion, corrected = fit$corrected)
+names(qc)
+}

@@ -22,3 +22,8 @@ Numeric vector of mean point displacements in millimeters.
 \description{
 Compute transform displacement on a radius-50 mm head surrogate
 }
+\examples{
+pose <- matrix(c(0, 0, 0, 0, 0, 0,
+                 0.5, 0, 0, 0, 0, 0), ncol = 6, byrow = TRUE)
+fd_from_transform(pose)
+}

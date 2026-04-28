@@ -13,11 +13,12 @@ volreg(
   slice_times = NULL,
   mb_groups = NULL,
   resample = TRUE,
-  interp_final = c("bspline", "lanczos", "linear"),
+  interp_final = NULL,
   pad_final = c("clamp", "zero"),
   zpad_final = 0L,
   qc = TRUE,
   control = volreg_control(),
+  profile = NULL,
   verbose = FALSE
 )
 }
@@ -38,7 +39,8 @@ volreg(
 
 \item{resample}{If TRUE, apply estimated motion to generate corrected output.}
 
-\item{interp_final}{Final interpolation method.}
+\item{interp_final}{Final interpolation method. When \code{NULL}, the active
+profile selects the final interpolator, falling back to \code{"bspline"}.}
 
 \item{pad_final}{Boundary handling for final resampling.}
 
@@ -49,6 +51,10 @@ resampling and cropping back to the original grid.}
 
 \item{control}{Control list.}
 
+\item{profile}{Optional named estimator profile. Bare \code{volreg()} uses
+\code{"fast_fmri"} when \code{control} is not supplied; pass \code{profile = NULL}
+with an explicit \code{control} list for fully manual settings.}
+
 \item{verbose}{Verbose logging.}
 }
 \value{
@@ -56,4 +62,9 @@ A \code{volregger_fit} object.
 }
 \description{
 Run retrospective motion correction
+}
+\examples{
+x <- volregger_example()
+fit <- volreg(x, profile = "fast_native", qc = FALSE, resample = FALSE)
+head(fit$motion)
 }

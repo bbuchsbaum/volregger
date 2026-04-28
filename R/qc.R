@@ -7,6 +7,12 @@
 #' @param cost_init Optional initial costs.
 #' @param cost_final Optional final costs.
 #' @return A list of QC metrics.
+#' @examples
+#' x <- volregger_example()
+#' fit <- volreg(x, profile = "fast_native", qc = FALSE, resample = TRUE,
+#'               interp_final = "linear")
+#' qc <- motion_qc(x, fit$motion, corrected = fit$corrected)
+#' names(qc)
 #' @export
 motion_qc <- function(
     x,

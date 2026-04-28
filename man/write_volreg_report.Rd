@@ -35,3 +35,9 @@ Invisibly returns a named character vector of written files.
 \description{
 Write a structured motion-correction report
 }
+\examples{
+x <- volregger_example()
+fit <- volreg(x, profile = "fast_native", resample = FALSE)
+rep <- volreg_report(fit)
+write_volreg_report(rep, out_dir = tempfile(), include_plot = FALSE)
+}

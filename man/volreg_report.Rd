@@ -25,3 +25,9 @@ motion matrices, and component labels.
 \description{
 Build a structured motion-correction report
 }
+\examples{
+x <- volregger_example()
+fit <- volreg(x, profile = "fast_native", resample = FALSE)
+rep <- volreg_report(fit)
+nrow(rep$frames)
+}

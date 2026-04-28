@@ -10,8 +10,22 @@ volregger_cli(args = commandArgs(trailingOnly = TRUE))
 \item{args}{Character vector of command line arguments.}
 }
 \value{
-Integer status code.
+Integer status code: \code{0} on success, \code{1} on a domain failure
+(e.g. invalid input file), \code{2} on a usage or runtime error.
 }
 \description{
-Run the volregger command line interface
+Programmatic entrypoint for the \code{volregger} shell wrapper. Tests and
+embedding callers should invoke this directly with an explicit \code{args}
+vector; the wrapper script handles \code{commandArgs()} parsing and exit
+status propagation.
+}
+\details{
+Available subcommands: \code{estimate}, \code{apply}, \code{run}, \code{report}. Run
+\verb{volregger help <command>} for per-command documentation.
+}
+\examples{
+volregger_cli("--version")
+\dontrun{
+volregger_cli(c("estimate", "--input", "run.nii.gz", "--out-fit", "fit.rds"))
+}
 }

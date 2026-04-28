@@ -7,19 +7,27 @@
 install_cli(
   dest_dir = "~/.local/bin",
   overwrite = FALSE,
-  commands = "volregger"
+  commands = "volregger",
+  quiet = FALSE
 )
 }
 \arguments{
-\item{dest_dir}{Destination directory.}
+\item{dest_dir}{Destination directory. Created if it does not exist.}
 
-\item{overwrite}{If \code{TRUE}, overwrite existing files.}
+\item{overwrite}{If \code{TRUE}, overwrite existing files in \code{dest_dir}.}
 
 \item{commands}{Character vector of wrapper names to install.}
+
+\item{quiet}{If \code{TRUE}, suppress informational messages.}
 }
 \value{
 Invisibly returns the installed file paths.
 }
 \description{
 Install the packaged volregger command wrapper
+}
+\examples{
+\dontrun{
+install_cli("~/.local/bin", overwrite = TRUE)
+}
 }

@@ -5,6 +5,11 @@
 #'   a `4 x 4 x nt` array, or a `16 x nt` matrix as returned by `estimate_motion()`.
 #' @return A `4 x 4 x nt` array of homogeneous transforms mapping moving
 #'   world coordinates into fixed world coordinates.
+#' @examples
+#' pose <- matrix(c(0, 0, 0, 0, 0, 0,
+#'                  0.5, 0, 0, 0, 0, 0), ncol = 6, byrow = TRUE)
+#' mats <- motion_matrices(pose)
+#' dim(mats)  # 4 x 4 x 2
 #' @export
 motion_matrices <- function(motion) {
   .motion_matrices_array(motion)
@@ -16,6 +21,10 @@ motion_matrices <- function(motion) {
 #'   a length-6 pose vector, an `nt x 6` pose matrix, a `4 x 4` matrix,
 #'   a `4 x 4 x nt` array, or a `16 x nt` matrix as returned by `estimate_motion()`.
 #' @return A `4 x 4 x nt` array containing the inverse transform for each frame.
+#' @examples
+#' pose <- c(0.5, 0, 0, 0, 0, 0)
+#' inv <- invert_motion(pose)
+#' inv[, , 1]
 #' @export
 invert_motion <- function(motion) {
   mats <- .motion_matrices_array(motion)
@@ -36,6 +45,10 @@ invert_motion <- function(motion) {
 #' @param reference Optional reference transform(s). If omitted, displacements
 #'   are computed against the identity transform.
 #' @return Numeric vector of mean point displacements in millimeters.
+#' @examples
+#' pose <- matrix(c(0, 0, 0, 0, 0, 0,
+#'                  0.5, 0, 0, 0, 0, 0), ncol = 6, byrow = TRUE)
+#' fd_from_transform(pose)
 #' @export
 fd_from_transform <- function(motion, radius = 50, reference = NULL) {
   mats <- .motion_matrices_array(motion)
@@ -63,6 +76,10 @@ fd_from_transform <- function(motion, radius = 50, reference = NULL) {
 #' @param pixdim Length-3 voxel size vector in millimeters.
 #' @return Numeric vector of Euclidean displacements in millimeters for voxels
 #'   inside `mask`.
+#' @examples
+#' mask <- array(TRUE, dim = c(4, 4, 2))
+#' pose <- c(0.5, 0, 0, 0, 0, 0)
+#' summary(displacements_within_mask(mask, pose))
 #' @export
 displacements_within_mask <- function(mask, motion, reference = NULL, pixdim = c(1, 1, 1)) {
   coords <- .mask_world_coords(mask, pixdim = pixdim)
@@ -84,6 +101,13 @@ displacements_within_mask <- function(mask, motion, reference = NULL, pixdim = c
 #' @param radius Sphere radius in millimeters for transform-space FD summaries.
 #' @return A data frame with per-frame transform metrics:
 #'   `disp_median`, `disp_p95`, `disp_max`, `fd_est`, `fd_truth`, and `fd_error`.
+#' @examples
+#' mask <- array(TRUE, dim = c(4, 4, 2))
+#' truth <- matrix(c(0, 0, 0, 0, 0, 0,
+#'                   0.5, 0, 0, 0, 0, 0), ncol = 6, byrow = TRUE)
+#' est <- truth
+#' est[2, 1] <- 0.45
+#' motion_displacement_summary(mask, est, truth)
 #' @export
 motion_displacement_summary <- function(mask, motion, truth, pixdim = c(1, 1, 1), radius = 50) {
   mats <- .motion_matrices_array(motion)

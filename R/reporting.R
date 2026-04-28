@@ -10,6 +10,11 @@
 #'
 #' @return A `volregger_report` object with summary rows, per-frame metrics,
 #'   motion matrices, and component labels.
+#' @examples
+#' x <- volregger_example()
+#' fit <- volreg(x, profile = "fast_native", resample = FALSE)
+#' rep <- volreg_report(fit)
+#' nrow(rep$frames)
 #' @export
 volreg_report <- function(fit, truth = NULL, mask = NULL, pixdim = NULL) {
   if (!inherits(fit, "volregger_fit")) {
@@ -64,6 +69,11 @@ volreg_report <- function(fit, truth = NULL, mask = NULL, pixdim = NULL) {
 #' @param res Plot DPI.
 #'
 #' @return Invisibly returns a named character vector of written files.
+#' @examples
+#' x <- volregger_example()
+#' fit <- volreg(x, profile = "fast_native", resample = FALSE)
+#' rep <- volreg_report(fit)
+#' write_volreg_report(rep, out_dir = tempfile(), include_plot = FALSE)
 #' @export
 write_volreg_report <- function(
     report,

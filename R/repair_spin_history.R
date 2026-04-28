@@ -7,6 +7,12 @@
 #' @param z_threshold Robust z-threshold for residual spike detection.
 #' @param smooth_window Odd integer smoothing window for temporal gain smoothing.
 #' @return A list with corrected output, gain map, and detection metadata.
+#' @examples
+#' x <- volregger_example()
+#' motion <- matrix(0, nrow = dim(x)[4], ncol = 6)
+#' motion[4, 3] <- 0.5  # injected through-plane shift at frame 4
+#' rep <- repair_spin_history(x, motion)
+#' dim(rep$corrected)
 #' @export
 repair_spin_history <- function(
     x,

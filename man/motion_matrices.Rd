@@ -18,3 +18,9 @@ world coordinates into fixed world coordinates.
 \description{
 Convert motion representations to homogeneous transform matrices
 }
+\examples{
+pose <- matrix(c(0, 0, 0, 0, 0, 0,
+                 0.5, 0, 0, 0, 0, 0), ncol = 6, byrow = TRUE)
+mats <- motion_matrices(pose)
+dim(mats)  # 4 x 4 x 2
+}

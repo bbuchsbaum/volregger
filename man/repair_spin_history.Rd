@@ -32,3 +32,10 @@ A list with corrected output, gain map, and detection metadata.
 \description{
 Optional spin-history intensity repair
 }
+\examples{
+x <- volregger_example()
+motion <- matrix(0, nrow = dim(x)[4], ncol = 6)
+motion[4, 3] <- 0.5  # injected through-plane shift at frame 4
+rep <- repair_spin_history(x, motion)
+dim(rep$corrected)
+}

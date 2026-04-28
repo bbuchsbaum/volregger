@@ -5,9 +5,12 @@
 \title{Named estimator profiles for ablation and benchmark work}
 \usage{
 volreg_profile(
-  name = c("dense_baseline", "fast_native", "ic_stencil", "ic_whiten", "ic_nuisance",
+  name = c("dense_baseline", "fast_native", "fast_native_parallel",
+    "fast_native_pyramid", "fast_fmri", "ic_stencil", "ic_whiten", "ic_nuisance",
     "ic_nuisance_adaptive", "ic_nuisance_adaptive_tuned", "ic_nuisance_adaptive_guarded",
-    "ic_nuisance_polish", "ic_nuisance_full", "slice_spline"),
+    "ic_nuisance_polish", "ic_nuisance_kernel_polish", "ic_nuisance_temporal_guard",
+    "ic_nuisance_se3", "ic_nuisance_temporal_prior", "ic_nuisance_low_motion_tsnr",
+    "ic_nuisance_low_motion_full", "ic_nuisance_full", "slice_spline"),
   control = volreg_control(),
   overrides = list()
 )
@@ -25,4 +28,9 @@ A \code{volreg_profile} object with fields \code{name}, \code{engine},
 }
 \description{
 Named estimator profiles for ablation and benchmark work
+}
+\examples{
+prof <- volreg_profile("fast_fmri")
+prof$engine
+head(names(prof$control))
 }
