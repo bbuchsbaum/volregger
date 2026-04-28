@@ -9,7 +9,14 @@ src/*.so
 # Local library/test output
 tests/testthat/_snaps/
 
+# pkgdown local build
+docs/
+
 # OMC state
 .omc/
 
 # beads runtime files are already ignored by .beads/.gitignore
+
+# Vendored external repos used only by inst/benchmarks/.
+# Fetch on demand via inst/benchmarks/fetch_nifreeze.sh.
+vendor/
