@@ -76,6 +76,23 @@ For more detail (synthetic phantoms with known motion, tuned controls, the
 two-step estimate/apply workflow, and the spline engine) see the
 `vignette("volregger")` walkthrough.
 
+### Transform-only workflow
+
+If you only need per-volume transforms, skip resampling and keep the motion
+estimates:
+
+```r
+fit <- volregger::volreg(x, resample = FALSE)
+
+pose6 <- coef(fit)                              # nt x 6: tx ty tz rx ry rz
+mats  <- volregger::motion_matrices(fit$mats)   # 4 x 4 x nt
+```
+
+`motion_matrices()` returns homogeneous transforms mapping moving world
+coordinates into the fixed/reference world coordinate frame.
+`estimate_motion()` exposes the same values directly as `est$par` and
+`est$mats`.
+
 ## Core API
 
 | Function | Purpose |
@@ -216,6 +233,25 @@ Outputs (under `--out-dir`, named with `--prefix`):
 - `<prefix>_motion.tsv` — 6-column motion params (tx, ty, tz, rx, ry, rz)
 - `<prefix>_summary.csv`, `<prefix>_frames.csv`, `<prefix>_matrices.csv`
 - `<prefix>_summary.txt`, `<prefix>_report.rds`, `<prefix>_overview.png`
+
+For matrix-only processing, skip corrected image output but keep the report
+bundle, including `<prefix>_matrices.csv`:
+
+```sh
+volregger run \
+  --input sub-01_task-rest_bold.nii.gz \
+  --out-dir out \
+  --prefix sub-01_task-rest \
+  --no-corrected \
+  --no-plot
+```
+
+Or estimate first and build the report from the saved fit:
+
+```sh
+volregger estimate --input run.nii.gz --out-fit fit.rds --out-motion motion.tsv
+volregger report --fit fit.rds --out-dir out --prefix run --no-plot
+```
 
 Subcommands:
 

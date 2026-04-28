@@ -150,6 +150,25 @@ matrix of (tx, ty, tz, rx, ry, rz):
 head(coef(fit))
 ```
 
+If you only need per-volume transforms, skip the final resampling step.
+The fit still contains the six-parameter poses and homogeneous matrices:
+
+```{r transform-only}
+fit_xform <- volreg(run, resample = FALSE)
+
+pose6 <- coef(fit_xform)
+mats <- motion_matrices(fit_xform$mats)
+
+dim(pose6)
+dim(mats)
+is.null(fit_xform$corrected)
+```
+
+`pose6` is the `nt x 6` parameter matrix. `mats` is a `4 x 4 x nt`
+array of transforms mapping moving world coordinates into the
+fixed/reference world coordinate frame. If you call `estimate_motion()`
+directly, the same objects are returned as `est$par` and `est$mats`.
+
 For a tidy data frame that includes QC columns alongside the parameters,
 use `as.data.frame()`:
 
